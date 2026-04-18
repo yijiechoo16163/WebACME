@@ -255,15 +255,15 @@ function renderStepChallenge() {
             <h3 class="h6">Challenge Instructions</h3>
             ${isHttp ? `
               <p class="mb-2"><strong>Filename:</strong></p>
-              <div class="challenge-box mb-2">.well-known/acme-challenge/${escapeHtml(challenge.token)}</div>
-              <button id="copyHttpPathBtn" class="btn btn-outline-secondary btn-sm mb-3" type="button" ${state.busy ? "disabled" : ""}>
-                Copy Filename Path
-              </button>
+              <div class="challenge-box challenge-copyable mb-3">
+                <span class="challenge-copyable-value">.well-known/acme-challenge/${escapeHtml(challenge.token)}</span>
+                <button id="copyHttpPathBtn" class="copy-icon-btn" type="button" title="Copy filename path" aria-label="Copy filename path" ${state.busy ? "disabled" : ""}>${copyIconSvg()}</button>
+              </div>
               <p class="mb-2"><strong>Content:</strong></p>
-              <div class="challenge-box mb-2">${escapeHtml(state.keyAuthorization)}</div>
-              <button id="copyHttpContentBtn" class="btn btn-outline-secondary btn-sm mb-3" type="button" ${state.busy ? "disabled" : ""}>
-                Copy Content
-              </button>
+              <div class="challenge-box challenge-copyable mb-3">
+                <span class="challenge-copyable-value">${escapeHtml(state.keyAuthorization)}</span>
+                <button id="copyHttpContentBtn" class="copy-icon-btn" type="button" title="Copy content" aria-label="Copy content" ${state.busy ? "disabled" : ""}>${copyIconSvg()}</button>
+              </div>
               <div>
                 <button id="downloadHttpChallengeBtn" class="btn btn-outline-secondary btn-sm" type="button" ${state.busy ? "disabled" : ""}>
                   Download HTTP-01 Challenge File
@@ -272,15 +272,15 @@ function renderStepChallenge() {
             ` : ""}
             ${isDns ? `
               <p class="mb-2"><strong>TXT Record Name:</strong></p>
-              <div class="challenge-box mb-2">_acme-challenge.${escapeHtml(state.domain)}</div>
-              <button id="copyDnsNameBtn" class="btn btn-outline-secondary btn-sm mb-3" type="button" ${state.busy ? "disabled" : ""}>
-                Copy TXT Record Name
-              </button>
+              <div class="challenge-box challenge-copyable mb-3">
+                <span class="challenge-copyable-value">_acme-challenge.${escapeHtml(state.domain)}</span>
+                <button id="copyDnsNameBtn" class="copy-icon-btn" type="button" title="Copy TXT record name" aria-label="Copy TXT record name" ${state.busy ? "disabled" : ""}>${copyIconSvg()}</button>
+              </div>
               <p class="mb-2"><strong>TXT Record Value:</strong></p>
-              <div class="challenge-box mb-2">${escapeHtml(state.dnsTxtValue)}</div>
-              <button id="copyDnsValueBtn" class="btn btn-outline-secondary btn-sm mb-3" type="button" ${state.busy ? "disabled" : ""}>
-                Copy TXT Record Value
-              </button>
+              <div class="challenge-box challenge-copyable mb-3">
+                <span class="challenge-copyable-value">${escapeHtml(state.dnsTxtValue)}</span>
+                <button id="copyDnsValueBtn" class="copy-icon-btn" type="button" title="Copy TXT record value" aria-label="Copy TXT record value" ${state.busy ? "disabled" : ""}>${copyIconSvg()}</button>
+              </div>
               <p class="mini-note mb-0">For dns-01, this value is SHA-256(keyAuthorization) in base64url format.</p>
             ` : ""}
           </div>
@@ -976,18 +976,41 @@ function downloadTextFile(filename, content, mimeType = "text/plain;charset=utf-
   URL.revokeObjectURL(objectUrl);
 }
 
+function copyIconSvg() {
+  return '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10 1.5a1.5 1.5 0 0 1 1.5 1.5v1H11V3a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h1v.5H4A1.5 1.5 0 0 1 2.5 9V3A1.5 1.5 0 0 1 4 1.5h6z"/><path d="M6 6a1.5 1.5 0 0 1 1.5-1.5h4A1.5 1.5 0 0 1 13 6v6a1.5 1.5 0 0 1-1.5 1.5h-4A1.5 1.5 0 0 1 6 12V6zm1.5-1a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-4z"/></svg>';
+}
+
+function checkIconSvg() {
+  return '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3-3a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z"/></svg>';
+}
+
 function bindCopyButton(buttonId, value, label) {
   const button = document.getElementById(buttonId);
   if (!button) {
     return;
   }
 
+  const defaultIcon = copyIconSvg();
+  const copiedIcon = checkIconSvg();
+  button.innerHTML = defaultIcon;
+
   button.addEventListener("click", async () => {
     try {
       await copyTextToClipboard(value);
+      button.innerHTML = copiedIcon;
+      button.classList.add("copied");
+      if (button.copyResetTimer) {
+        clearTimeout(button.copyResetTimer);
+      }
+      button.copyResetTimer = setTimeout(() => {
+        button.innerHTML = defaultIcon;
+        button.classList.remove("copied");
+      }, 1600);
       pushLog(`Copied ${label}.`);
       renderLog();
     } catch {
+      button.innerHTML = defaultIcon;
+      button.classList.remove("copied");
       handleError(new Error(`Failed to copy ${label}.`));
     }
   });

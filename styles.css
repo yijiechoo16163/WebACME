@@ -122,6 +122,55 @@ body {
   overflow-wrap: anywhere;
 }
 
+.challenge-copyable {
+  position: relative;
+  padding-right: 3rem;
+  min-height: 3rem;
+}
+
+.challenge-copyable-value {
+  display: block;
+}
+
+.copy-icon-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid #c6d7e7;
+  border-radius: 0.5rem;
+  background: #ffffff;
+  color: #325777;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.copy-icon-btn:hover:not(:disabled) {
+  background: #ecf7ff;
+  border-color: #9dc5e4;
+  color: #19466e;
+}
+
+.copy-icon-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.copy-icon-btn svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.copy-icon-btn.copied {
+  background: #e9f8ef;
+  border-color: #9ed2b3;
+  color: #11663b;
+}
+
 .event-log {
   margin: 0;
   min-height: 160px;
