@@ -230,6 +230,7 @@ function renderStepAccountInit() {
           <td class="text-nowrap">${escapeHtml(createdAtLabel)}</td>
           <td class="text-nowrap">
             <button class="btn btn-sm btn-outline-primary me-2" data-account-action="use" data-account-id="${escapeHtml(account.id)}" type="button" ${state.busy ? "disabled" : ""}>Use</button>
+            <button class="btn btn-sm btn-outline-secondary me-2" data-account-action="rename" data-account-id="${escapeHtml(account.id)}" type="button" ${state.busy ? "disabled" : ""}>Rename</button>
             <button class="btn btn-sm btn-outline-danger" data-account-action="delete" data-account-id="${escapeHtml(account.id)}" type="button" ${state.busy ? "disabled" : ""}>Delete</button>
           </td>
         </tr>
@@ -281,6 +282,13 @@ function renderStepAccountInit() {
           </div>
           <span class="badge text-bg-secondary">${state.savedAccounts.length} saved</span>
         </div>
+
+        <div class="d-flex gap-2 flex-wrap mb-2">
+          <button id="exportAccountsBtn" class="btn btn-outline-secondary" type="button" ${!state.savedAccounts.length || state.busy ? "disabled" : ""}>Export Saved Accounts</button>
+          <button id="importAccountsBtn" class="btn btn-outline-secondary" type="button" ${state.busy ? "disabled" : ""}>Import Accounts JSON</button>
+          <input id="importAccountsInput" class="d-none" type="file" accept=".json,application/json" />
+        </div>
+        <p class="mini-note mb-3">Export/import includes ACME account private keys. Keep the JSON file in a secure place.</p>
 
         <div class="row g-2 mb-3">
           <div class="col-md-8">
@@ -381,6 +389,31 @@ function renderStepAccountInit() {
         return;
       }
 
+      if (action === "rename") {
+        const account = getSavedAccountById(accountId);
+        if (!account) {
+          return;
+        }
+
+        const nextNicknameRaw = window.prompt("Enter new nickname:", account.nickname);
+        if (nextNicknameRaw === null) {
+          return;
+        }
+
+        const nextNickname = sanitizeAccountNickname(nextNicknameRaw);
+        if (!nextNickname) {
+          setAlert("warning", "Nickname cannot be empty.");
+          render();
+          return;
+        }
+
+        renameSavedAccount(accountId, nextNickname);
+        pushLog(`Renamed account to "${nextNickname}".`);
+        setAlert("success", "Account nickname updated.");
+        render();
+        return;
+      }
+
       if (action === "use") {
         try {
           await runStep("Loading saved ACME account...", async () => {
@@ -391,6 +424,49 @@ function renderStepAccountInit() {
         }
       }
     });
+  });
+
+  document.getElementById("exportAccountsBtn")?.addEventListener("click", () => {
+    try {
+      exportSavedAccountsToFile();
+      pushLog(`Exported ${state.savedAccounts.length} saved ACME account(s).`);
+      setAlert("success", "Saved ACME accounts exported.");
+      render();
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+  const importAccountsInput = document.getElementById("importAccountsInput");
+  document.getElementById("importAccountsBtn")?.addEventListener("click", () => {
+    if (state.busy) {
+      return;
+    }
+
+    importAccountsInput?.click();
+  });
+
+  importAccountsInput?.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const importResult = await importAccountsFromFile(file);
+      if (importResult.lastImportedAccountId) {
+        state.selectedAccountId = importResult.lastImportedAccountId;
+      }
+
+      const importedMessage = `Imported ${importResult.importedCount} new account(s), updated ${importResult.updatedCount} existing account(s).`;
+      pushLog(importedMessage);
+      setAlert("success", importedMessage);
+    } catch (error) {
+      handleError(error);
+    } finally {
+      event.target.value = "";
+      render();
+    }
   });
 
   document.getElementById("accountInitForm").addEventListener("submit", async (event) => {
@@ -408,7 +484,7 @@ function renderStepAccountInit() {
     try {
       await runStep("Initializing ACME account...", async () => {
         state.email = emailValue;
-        state.accountNickname = accountNicknameValue;
+        state.accountNickname = sanitizeAccountNickname(accountNicknameValue);
         state.provider = providerValue;
         state.environment = envValue;
         await initializeAcmeAccount();
@@ -937,7 +1013,7 @@ function loadSavedAccounts() {
     }
 
     return parsed
-      .map((item) => normalizeSavedAccount(item))
+      .map((item) => normalizeSavedAccount(item, { allowMissingId: true, allowMissingCreatedAt: true }))
       .filter(Boolean)
       .sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime());
   } catch {
@@ -945,20 +1021,20 @@ function loadSavedAccounts() {
   }
 }
 
-function normalizeSavedAccount(value) {
+function normalizeSavedAccount(value, options = {}) {
+  const { allowMissingId = false, allowMissingCreatedAt = false } = options;
+
   if (!value || typeof value !== "object") {
     return null;
   }
 
   const requiredFields = [
-    "id",
     "nickname",
     "providerId",
     "environmentId",
     "accountKid",
     "accountPrivateKeyPem",
     "accountThumbprint",
-    "createdAt",
   ];
 
   for (const field of requiredFields) {
@@ -971,18 +1047,42 @@ function normalizeSavedAccount(value) {
     return null;
   }
 
+  let accountId = typeof value.id === "string" ? value.id.trim() : "";
+  if (!accountId && !allowMissingId) {
+    return null;
+  }
+  if (!accountId) {
+    accountId = createAccountId();
+  }
+
+  let createdAt = typeof value.createdAt === "string" ? value.createdAt.trim() : "";
+  if (!createdAt && !allowMissingCreatedAt) {
+    return null;
+  }
+  if (!createdAt) {
+    createdAt = new Date().toISOString();
+  }
+
   return {
-    id: value.id,
-    nickname: value.nickname,
-    providerId: value.providerId,
-    environmentId: value.environmentId,
+    id: accountId,
+    nickname: sanitizeAccountNickname(value.nickname),
+    providerId: value.providerId.trim(),
+    environmentId: value.environmentId.trim(),
     email: typeof value.email === "string" ? value.email : "",
-    accountKid: value.accountKid,
+    accountKid: value.accountKid.trim(),
     accountPrivateKeyPem: value.accountPrivateKeyPem,
     accountJwk: value.accountJwk,
-    accountThumbprint: value.accountThumbprint,
-    createdAt: value.createdAt,
+    accountThumbprint: value.accountThumbprint.trim(),
+    createdAt,
   };
+}
+
+function createAccountId() {
+  return typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `acct_${Date.now()}`;
+}
+
+function sanitizeAccountNickname(value) {
+  return String(value || "").trim().slice(0, 60);
 }
 
 function persistSavedAccounts(accounts) {
@@ -1026,16 +1126,155 @@ function buildDefaultAccountNickname(email, providerId, environmentId) {
   return `${getProviderLabel(providerId)} ${environmentId} account`;
 }
 
+function sortAccountsByCreatedAtDesc(accounts) {
+  accounts.sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime());
+}
+
+function renameSavedAccount(accountId, nicknameInput) {
+  const nextNickname = sanitizeAccountNickname(nicknameInput);
+  if (!nextNickname) {
+    throw new Error("Nickname cannot be empty.");
+  }
+
+  const accountIndex = state.savedAccounts.findIndex((account) => account.id === accountId);
+  if (accountIndex < 0) {
+    throw new Error("Saved account not found.");
+  }
+
+  const nextAccounts = [...state.savedAccounts];
+  nextAccounts[accountIndex] = {
+    ...nextAccounts[accountIndex],
+    nickname: nextNickname,
+  };
+
+  persistSavedAccounts(nextAccounts);
+  state.savedAccounts = nextAccounts;
+
+  if (state.selectedAccountId === accountId) {
+    state.accountNickname = nextNickname;
+  }
+}
+
+function exportSavedAccountsToFile() {
+  if (!state.savedAccounts.length) {
+    throw new Error("There are no saved accounts to export.");
+  }
+
+  const payload = {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    accounts: state.savedAccounts,
+  };
+
+  const filenameDate = new Date().toISOString().slice(0, 10);
+  downloadTextFile(
+    `webacme-accounts-${filenameDate}.json`,
+    `${JSON.stringify(payload, null, 2)}\n`,
+    "application/json;charset=utf-8"
+  );
+}
+
+function readTextFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(new Error("Failed to read import file."));
+    reader.readAsText(file);
+  });
+}
+
+function extractAccountsForImport(payload) {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  if (payload && typeof payload === "object" && Array.isArray(payload.accounts)) {
+    return payload.accounts;
+  }
+
+  throw new Error("Import file must be a JSON array or an object with an accounts array.");
+}
+
+function mergeImportedAccounts(existingAccounts, importedAccounts) {
+  const mergedAccounts = [...existingAccounts];
+  let importedCount = 0;
+  let updatedCount = 0;
+  let lastImportedAccountId = "";
+
+  for (const importedAccount of importedAccounts) {
+    const existingIndex = mergedAccounts.findIndex(
+      (account) => account.providerId === importedAccount.providerId
+        && account.environmentId === importedAccount.environmentId
+        && account.accountKid === importedAccount.accountKid
+    );
+
+    if (existingIndex >= 0) {
+      mergedAccounts[existingIndex] = {
+        ...mergedAccounts[existingIndex],
+        ...importedAccount,
+        id: mergedAccounts[existingIndex].id,
+        createdAt: mergedAccounts[existingIndex].createdAt || importedAccount.createdAt,
+      };
+      lastImportedAccountId = mergedAccounts[existingIndex].id;
+      updatedCount += 1;
+      continue;
+    }
+
+    mergedAccounts.push({
+      ...importedAccount,
+      id: importedAccount.id || createAccountId(),
+      createdAt: importedAccount.createdAt || new Date().toISOString(),
+    });
+    lastImportedAccountId = mergedAccounts[mergedAccounts.length - 1].id;
+    importedCount += 1;
+  }
+
+  sortAccountsByCreatedAtDesc(mergedAccounts);
+
+  return {
+    accounts: mergedAccounts,
+    importedCount,
+    updatedCount,
+    lastImportedAccountId,
+  };
+}
+
+async function importAccountsFromFile(file) {
+  const text = await readTextFile(file);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Import file is not valid JSON.");
+  }
+
+  const rawAccounts = extractAccountsForImport(parsed);
+  const importedAccounts = rawAccounts
+    .map((item) => normalizeSavedAccount(item, { allowMissingId: true, allowMissingCreatedAt: true }))
+    .filter(Boolean);
+
+  if (!importedAccounts.length) {
+    throw new Error("No valid ACME accounts found in import file.");
+  }
+
+  const mergeResult = mergeImportedAccounts(state.savedAccounts, importedAccounts);
+  persistSavedAccounts(mergeResult.accounts);
+  state.savedAccounts = mergeResult.accounts;
+
+  return mergeResult;
+}
+
 function saveCurrentAccountToBrowser(nicknameInput) {
   if (!state.accountKid || !state.accountPrivateKeyPem || !state.accountJwk || !state.accountThumbprint) {
     throw new Error("Current account is incomplete and cannot be saved.");
   }
 
   const nowIso = new Date().toISOString();
-  const nickname = nicknameInput || buildDefaultAccountNickname(state.email, state.provider, state.environment);
+  const nickname = sanitizeAccountNickname(nicknameInput) || buildDefaultAccountNickname(state.email, state.provider, state.environment);
 
   const newAccount = {
-    id: typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `acct_${Date.now()}`,
+    id: createAccountId(),
     nickname,
     providerId: state.provider,
     environmentId: state.environment,
@@ -1070,7 +1309,7 @@ function saveCurrentAccountToBrowser(nicknameInput) {
     nextAccounts = [...state.savedAccounts, newAccount];
   }
 
-  nextAccounts.sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime());
+  sortAccountsByCreatedAtDesc(nextAccounts);
   persistSavedAccounts(nextAccounts);
   state.savedAccounts = nextAccounts;
 
