@@ -734,7 +734,7 @@ function renderStepCertificateConfig() {
         <label class="form-label">Subject Alternative Names (SAN)</label>
         ${sanRows}
         <div class="form-text">
-          One SAN per row. Enter DNS names and/or IP addresses. A blank row is added automatically while typing.
+          One SAN per row. Enter DNS names and/or IP addresses. Press Enter in a SAN field to add the next row.
           Profile supports: ${escapeHtml(supportedTypeLabel || "DNS")}
         </div>
       </div>
@@ -754,12 +754,34 @@ function renderStepCertificateConfig() {
   document.querySelectorAll(".san-input").forEach((input) => {
     input.addEventListener("input", () => {
       const currentInputs = Array.from(document.querySelectorAll(".san-input"));
-      state.sanInputValues = currentInputs.map((item) => item.value);
-      const previousLength = state.sanInputValues.length;
-      state.sanInputValues = normalizeSanInputValues(state.sanInputValues);
-      if (state.sanInputValues.length !== previousLength) {
-        render();
+      state.sanInputValues = normalizeSanInputValues(currentInputs.map((item) => item.value));
+    });
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || state.busy) {
+        return;
       }
+
+      event.preventDefault();
+
+      const currentInputs = Array.from(document.querySelectorAll(".san-input"));
+      state.sanInputValues = normalizeSanInputValues(currentInputs.map((item) => item.value));
+
+      const currentIndex = Number(input.getAttribute("data-san-index"));
+      if (!Number.isInteger(currentIndex) || currentIndex < 0) {
+        return;
+      }
+
+      const nextIndex = currentIndex + 1;
+      if (currentIndex >= state.sanInputValues.length - 1) {
+        state.sanInputValues.push("");
+      }
+
+      render();
+      window.requestAnimationFrame(() => {
+        const nextInput = document.querySelector(`.san-input[data-san-index="${nextIndex}"]`);
+        nextInput?.focus();
+      });
     });
   });
 
@@ -805,7 +827,7 @@ function renderStepCertificateConfig() {
       await runStep("Creating ACME order...", async () => {
         state.profile = profileValue;
         state.sanIdentifiers = sanParseResult.identifiers;
-        state.sanInputValues = [...sanParseResult.identifiers.map((item) => item.value), ""];
+        state.sanInputValues = normalizeSanInputValues(sanParseResult.identifiers.map((item) => item.value));
         state.identifierValue = sanParseResult.identifiers[0].value;
         state.certType = deriveRequestCertType(sanParseResult.identifiers);
         await createAcmeOrder();
@@ -2654,7 +2676,7 @@ function normalizeIdentifierValue(value) {
 function normalizeSanInputValues(values) {
   const nextValues = Array.isArray(values)
     ? values.map((item) => String(item || ""))
-    : [""];
+    : [];
 
   while (
     nextValues.length > 1
@@ -2664,7 +2686,7 @@ function normalizeSanInputValues(values) {
     nextValues.pop();
   }
 
-  if (!nextValues.length || nextValues[nextValues.length - 1].trim()) {
+  if (!nextValues.length) {
     nextValues.push("");
   }
 
