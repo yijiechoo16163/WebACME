@@ -1468,8 +1468,7 @@ async function initializeAcmeAccount() {
   state.accountKid = accountKid;
   state.accountReady = true;
   state.step = 2;
-  state.page = PAGE_IDS.REQUEST_CERT;
-  setAlert("success", "ACME account initialized. Continue to certificate configuration.");
+  setAlert("success", "ACME account initialized and saved. You can stay in Account Manager or open Request Cert.");
 }
 
 async function createAcmeOrder() {
