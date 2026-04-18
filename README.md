@@ -8,11 +8,12 @@ WebACME is a static, browser-only ACME client prototype for issuing certificates
 - Uses WebCrypto for account/domain key generation and request signing.
 - Calls Let's Encrypt ACME v2 endpoints directly with `fetch` (CORS-enabled).
 - Builds CSR data in-browser using `forge`.
-- Provides a 4-step Bootstrap UI flow.
-- Step 1: Identity and account/order setup.
-- Step 2: Challenge details (http-01 or dns-01) with switchable button-based method selection.
-- Step 3: CSR generation and order finalization.
-- Step 4: Certificate/key download.
+- Provides a 5-step Bootstrap UI flow.
+- Step 1: ACME account initialization (email + provider + environment).
+- Step 2: Certificate configuration (provider-tailored cert type + domain/IP input).
+- Step 3: Challenge details (http-01 or dns-01) with switchable button-based method selection.
+- Step 4: CSR generation and order finalization.
+- Step 5: Certificate/key download.
 
 ## Files
 
@@ -47,7 +48,8 @@ Then open <http://localhost:8080>.
 
 ## Current Scope
 
-- Single-domain flow is implemented.
+- Let's Encrypt provider flow is implemented with staged setup for future provider expansion.
+- Cert type supports both domain (`dns`) and IP (`ip`) order identifiers.
 - Account and domain private key export buttons are included.
 - Session reset clears runtime state and localStorage.
 

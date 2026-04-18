@@ -1,13 +1,23 @@
 const STEPS = [
-  { id: 1, label: "Identity" },
-  { id: 2, label: "Challenge" },
-  { id: 3, label: "CSR & Finalize" },
-  { id: 4, label: "Result" },
+  { id: 1, label: "Account Init" },
+  { id: 2, label: "Certificate Config" },
+  { id: 3, label: "Challenge" },
+  { id: 4, label: "CSR & Finalize" },
+  { id: 5, label: "Result" },
 ];
 
-const DIRECTORY_URLS = {
-  staging: "https://acme-staging-v02.api.letsencrypt.org/directory",
-  production: "https://acme-v02.api.letsencrypt.org/directory",
+const ACME_PROVIDERS = {
+  letsencrypt: {
+    label: "Let's Encrypt",
+    environments: {
+      staging: "https://acme-staging-v02.api.letsencrypt.org/directory",
+      production: "https://acme-v02.api.letsencrypt.org/directory",
+    },
+    certTypes: [
+      { id: "dns", label: "Domain Certificate", placeholder: "example.com" },
+      { id: "ip", label: "IP Certificate", placeholder: "203.0.113.10 or 2001:db8::1" },
+    ],
+  },
 };
 
 function createInitialState() {
@@ -17,8 +27,11 @@ function createInitialState() {
     busy: false,
     logs: ["Session initialized."],
     email: "",
-    domain: "",
+    provider: "letsencrypt",
     environment: "staging",
+    accountReady: false,
+    certType: "dns",
+    identifierValue: "",
     directory: null,
     nonce: null,
     accountKeyPair: null,
@@ -129,42 +142,58 @@ function renderAlert() {
 
 function renderCurrentStep() {
   if (state.step === 1) {
-    renderStepIdentity();
+    renderStepAccountInit();
     return;
   }
   if (state.step === 2) {
-    renderStepChallenge();
+    renderStepCertificateConfig();
     return;
   }
   if (state.step === 3) {
+    renderStepChallenge();
+    return;
+  }
+  if (state.step === 4) {
     renderStepFinalize();
     return;
   }
   renderStepResult();
 }
 
-function renderStepIdentity() {
+function renderStepAccountInit() {
+  const provider = getProviderConfig(state.provider);
+  const providerOptions = Object.entries(ACME_PROVIDERS)
+    .map(([providerId, providerConfig]) => {
+      const selected = providerId === state.provider ? "selected" : "";
+      return `<option value="${providerId}" ${selected}>${escapeHtml(providerConfig.label)}</option>`;
+    })
+    .join("");
+  const environmentOptions = Object.keys(provider.environments)
+    .map((environmentId) => {
+      const selected = environmentId === state.environment ? "selected" : "";
+      const label = environmentId === "staging" ? "Staging (recommended for testing)" : "Production";
+      return `<option value="${environmentId}" ${selected}>${label}</option>`;
+    })
+    .join("");
+
   refs.content.innerHTML = `
     <div class="mb-3">
-      <h2 class="h5">Step 1: Identity & Account Setup</h2>
-      <p class="mini-note mb-0">Generate your ACME account key in browser memory and create an order.</p>
+      <h2 class="h5">Step 1: ACME Account Initialization</h2>
+      <p class="mini-note mb-0">Choose provider and environment, then initialize your ACME account key in browser memory.</p>
     </div>
 
-    <form id="identityForm" class="row g-3">
+    <form id="accountInitForm" class="row g-3">
       <div class="col-md-6">
         <label for="emailInput" class="form-label">Email (optional)</label>
         <input id="emailInput" class="form-control" type="email" placeholder="you@example.com" value="${escapeHtml(state.email)}" />
       </div>
       <div class="col-md-6">
-        <label for="domainInput" class="form-label">Domain Name</label>
-        <input id="domainInput" class="form-control" type="text" placeholder="example.com" required value="${escapeHtml(state.domain)}" />
+        <label for="providerInput" class="form-label">ACME Provider</label>
+        <select id="providerInput" class="form-select">${providerOptions}</select>
       </div>
       <div class="col-md-6">
-        <label for="environmentInput" class="form-label">Let&apos;s Encrypt Environment</label>
-        <select id="environmentInput" class="form-select">
-          <option value="staging" ${state.environment === "staging" ? "selected" : ""}>Staging (recommended for testing)</option>
-          <option value="production" ${state.environment === "production" ? "selected" : ""}>Production</option>
-        </select>
+        <label for="environmentInput" class="form-label">Provider Environment</label>
+        <select id="environmentInput" class="form-select">${environmentOptions}</select>
       </div>
       <div class="col-12">
         <div class="alert alert-warning mb-0">
@@ -172,14 +201,25 @@ function renderStepIdentity() {
         </div>
       </div>
       <div class="col-12 d-flex gap-2 flex-wrap">
-        <button class="btn btn-primary" id="startOrderBtn" type="submit" ${state.busy ? "disabled" : ""}>
-          ${state.busy ? "Working..." : "Generate Account Key + Start Order"}
+        <button class="btn btn-primary" id="initAccountBtn" type="submit" ${state.busy ? "disabled" : ""}>
+          ${state.busy ? "Working..." : "Initialize ACME Account"}
         </button>
       </div>
     </form>
   `;
 
-  document.getElementById("identityForm").addEventListener("submit", async (event) => {
+  document.getElementById("providerInput").addEventListener("change", (event) => {
+    const nextProviderId = event.target.value;
+    const nextProvider = getProviderConfig(nextProviderId);
+    const availableEnvironments = Object.keys(nextProvider.environments);
+    state.provider = nextProviderId;
+    if (!availableEnvironments.includes(state.environment)) {
+      state.environment = availableEnvironments[0];
+    }
+    render();
+  });
+
+  document.getElementById("accountInitForm").addEventListener("submit", async (event) => {
     event.preventDefault();
 
     if (state.busy) {
@@ -187,21 +227,104 @@ function renderStepIdentity() {
     }
 
     const emailValue = document.getElementById("emailInput").value.trim();
-    const domainValue = normalizeDomain(document.getElementById("domainInput").value);
+    const providerValue = document.getElementById("providerInput").value;
     const envValue = document.getElementById("environmentInput").value;
 
-    if (!domainValue) {
-      setAlert("danger", "Please enter a domain name.");
+    try {
+      await runStep("Initializing ACME account...", async () => {
+        state.email = emailValue;
+        state.provider = providerValue;
+        state.environment = envValue;
+        await initializeAcmeAccount();
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+}
+
+function renderStepCertificateConfig() {
+  if (!state.accountReady) {
+    state.step = 1;
+    render();
+    return;
+  }
+
+  const provider = getProviderConfig(state.provider);
+  const availableCertTypes = provider.certTypes || [{ id: "dns", label: "Domain Certificate", placeholder: "example.com" }];
+
+  if (!availableCertTypes.some((item) => item.id === state.certType)) {
+    state.certType = availableCertTypes[0].id;
+  }
+
+  const selectedCertType = availableCertTypes.find((item) => item.id === state.certType) || availableCertTypes[0];
+  const certTypeOptions = availableCertTypes
+    .map((item) => {
+      const selected = item.id === state.certType ? "selected" : "";
+      return `<option value="${item.id}" ${selected}>${escapeHtml(item.label)}</option>`;
+    })
+    .join("");
+  const identifierLabel = state.certType === "ip" ? "IP Address" : "Domain Name";
+  const identifierHelp = state.certType === "ip"
+    ? "Use a public IP address that you control."
+    : "Use a domain such as example.com or www.example.com.";
+
+  refs.content.innerHTML = `
+    <div class="mb-3">
+      <h2 class="h5">Step 2: Configure Certificate Request</h2>
+      <p class="mini-note mb-0">Account is ready for ${escapeHtml(provider.label)}. Configure certificate target and create your order.</p>
+    </div>
+
+    <form id="certificateConfigForm" class="row g-3">
+      <div class="col-md-6">
+        <label for="certTypeInput" class="form-label">Certificate Type</label>
+        <select id="certTypeInput" class="form-select" ${state.busy ? "disabled" : ""}>${certTypeOptions}</select>
+      </div>
+      <div class="col-md-6">
+        <label for="identifierInput" class="form-label">${identifierLabel}</label>
+        <input id="identifierInput" class="form-control" type="text" placeholder="${escapeHtml(selectedCertType.placeholder || "example.com")}" value="${escapeHtml(state.identifierValue)}" required />
+        <div class="form-text">${identifierHelp}</div>
+      </div>
+      <div class="col-12 d-flex gap-2 flex-wrap">
+        <button class="btn btn-primary" id="createOrderBtn" type="submit" ${state.busy ? "disabled" : ""}>
+          ${state.busy ? "Working..." : "Create ACME Order"}
+        </button>
+      </div>
+    </form>
+  `;
+
+  document.getElementById("certTypeInput").addEventListener("change", (event) => {
+    state.certType = event.target.value;
+    render();
+  });
+
+  document.getElementById("certificateConfigForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    if (state.busy) {
+      return;
+    }
+
+    const identifierValue = normalizeIdentifierValue(document.getElementById("identifierInput").value);
+    const certTypeValue = document.getElementById("certTypeInput").value;
+
+    if (!identifierValue) {
+      setAlert("danger", "Please enter a domain name or IP address.");
+      render();
+      return;
+    }
+
+    if (certTypeValue === "ip" && !isLikelyIpAddress(identifierValue)) {
+      setAlert("danger", "Certificate type is set to IP, but the value does not look like a valid IP address.");
       render();
       return;
     }
 
     try {
-      await runStep("Creating ACME account and order...", async () => {
-        state.email = emailValue;
-        state.domain = domainValue;
-        state.environment = envValue;
-        await startAcmeOrder();
+      await runStep("Creating ACME order...", async () => {
+        state.certType = certTypeValue;
+        state.identifierValue = identifierValue;
+        await createAcmeOrder();
       });
     } catch (error) {
       handleError(error);
@@ -220,7 +343,7 @@ function renderStepChallenge() {
 
   refs.content.innerHTML = `
     <div class="mb-3">
-      <h2 class="h5">Step 2: Complete ${escapeHtml(challenge?.type || "")}</h2>
+      <h2 class="h5">Step 3: Complete ${escapeHtml(challenge?.type || "")}</h2>
       <p class="mini-note mb-0">Publish the token response, then notify Let&apos;s Encrypt and wait for authorization.</p>
     </div>
 
@@ -273,7 +396,7 @@ function renderStepChallenge() {
             ${isDns ? `
               <p class="mb-2"><strong>TXT Record Name:</strong></p>
               <div class="challenge-box challenge-copyable mb-3">
-                <span class="challenge-copyable-value">_acme-challenge.${escapeHtml(state.domain)}</span>
+                <span class="challenge-copyable-value">_acme-challenge.${escapeHtml(state.identifierValue)}</span>
                 <button id="copyDnsNameBtn" class="copy-icon-btn" type="button" title="Copy TXT record name" aria-label="Copy TXT record name" ${state.busy ? "disabled" : ""}>${copyIconSvg()}</button>
               </div>
               <p class="mb-2"><strong>TXT Record Value:</strong></p>
@@ -339,7 +462,7 @@ function renderStepChallenge() {
   }
 
   if (isDns) {
-    bindCopyButton("copyDnsNameBtn", `_acme-challenge.${state.domain}`, "DNS TXT record name");
+    bindCopyButton("copyDnsNameBtn", `_acme-challenge.${state.identifierValue}`, "DNS TXT record name");
     bindCopyButton("copyDnsValueBtn", state.dnsTxtValue, "DNS TXT record value");
   }
 
@@ -364,7 +487,7 @@ function renderStepChallenge() {
       await runStep("Checking authorization status...", async () => {
         const auth = await fetchAuthorization();
         if (auth.status === "valid") {
-          state.step = 3;
+          state.step = 4;
           pushLog("Authorization is valid. Proceed to CSR/finalize.");
         } else {
           pushLog(`Authorization is currently ${auth.status}.`);
@@ -379,7 +502,7 @@ function renderStepChallenge() {
 function renderStepFinalize() {
   refs.content.innerHTML = `
     <div class="mb-3">
-      <h2 class="h5">Step 3: Generate Domain Key, CSR, and Finalize</h2>
+      <h2 class="h5">Step 4: Generate Domain Key, CSR, and Finalize</h2>
       <p class="mini-note mb-0">Your domain private key is generated locally and never sent to a backend.</p>
     </div>
 
@@ -419,7 +542,7 @@ function renderStepFinalize() {
         const order = await fetchOrder();
         if (order.status === "valid" && order.certificate) {
           await fetchCertificate(order.certificate);
-          state.step = 4;
+          state.step = 5;
           pushLog("Order already valid. Certificate downloaded.");
         } else {
           pushLog(`Order is currently ${order.status}.`);
@@ -434,7 +557,7 @@ function renderStepFinalize() {
 function renderStepResult() {
   refs.content.innerHTML = `
     <div class="mb-3">
-      <h2 class="h5">Step 4: Certificate Ready</h2>
+      <h2 class="h5">Step 5: Certificate Ready</h2>
       <p class="mini-note mb-0">Download your certificate and private key directly from browser memory.</p>
     </div>
 
@@ -454,12 +577,14 @@ function renderStepResult() {
     </div>
   `;
 
+  const fileStem = getCertificateFileStem(state.identifierValue || "certificate");
+
   document.getElementById("downloadCertBtn").addEventListener("click", () => {
-    downloadTextFile(`${state.domain}.crt`, state.certificatePem);
+    downloadTextFile(`${fileStem}.crt`, state.certificatePem);
   });
 
   document.getElementById("downloadKeyBtn").addEventListener("click", () => {
-    downloadTextFile(`${state.domain}.key`, state.domainPrivateKeyPem);
+    downloadTextFile(`${fileStem}.key`, state.domainPrivateKeyPem);
   });
 }
 
@@ -513,16 +638,48 @@ function resetSession() {
   render();
 }
 
-async function startAcmeOrder() {
+function getProviderConfig(providerId = state.provider) {
+  const providerConfig = ACME_PROVIDERS[providerId];
+  if (!providerConfig) {
+    throw new Error(`Unknown ACME provider: ${providerId}`);
+  }
+  return providerConfig;
+}
+
+function getDirectoryUrlForSelection() {
+  const providerConfig = getProviderConfig();
+  const directoryUrl = providerConfig.environments[state.environment];
+  if (!directoryUrl) {
+    throw new Error(`Environment ${state.environment} is not available for ${providerConfig.label}.`);
+  }
+  return directoryUrl;
+}
+
+function clearOrderContext() {
+  state.identifierValue = "";
+  state.order = null;
+  state.orderUrl = "";
+  state.authorization = null;
+  state.authorizationUrl = "";
+  state.availableChallenges = {};
+  state.selectedChallengeType = "";
+  state.challenge = null;
+  state.keyAuthorization = "";
+  state.dnsTxtValue = "";
+  state.domainKeyPair = null;
+  state.domainPrivateKeyPem = "";
+  state.certificatePem = "";
+}
+
+async function initializeAcmeAccount() {
   if (!window.crypto?.subtle) {
     throw new Error("WebCrypto API is unavailable in this browser.");
   }
 
-  state.certificatePem = "";
-  state.domainPrivateKeyPem = "";
-  state.domainKeyPair = null;
+  clearOrderContext();
+  state.accountReady = false;
 
-  const directoryUrl = DIRECTORY_URLS[state.environment];
+  const directoryUrl = getDirectoryUrlForSelection();
   pushLog(`Loading ACME directory: ${directoryUrl}`);
   state.directory = await fetchJson(directoryUrl);
 
@@ -547,10 +704,32 @@ async function startAcmeOrder() {
     throw new Error("ACME account creation did not return account location (kid).");
   }
   state.accountKid = accountKid;
+  state.accountReady = true;
+  state.step = 2;
+  setAlert("success", "ACME account initialized. Continue to certificate configuration.");
+}
+
+async function createAcmeOrder() {
+  if (!state.accountReady || !state.accountKid || !state.directory) {
+    throw new Error("Please initialize your ACME account first.");
+  }
+
+  state.order = null;
+  state.orderUrl = "";
+  state.authorization = null;
+  state.authorizationUrl = "";
+  state.availableChallenges = {};
+  state.selectedChallengeType = "";
+  state.challenge = null;
+  state.keyAuthorization = "";
+  state.dnsTxtValue = "";
+  state.certificatePem = "";
+  state.domainPrivateKeyPem = "";
+  state.domainKeyPair = null;
 
   pushLog("Creating new order...");
   const orderResponse = await acmePost(state.directory.newOrder, {
-    identifiers: [{ type: "dns", value: state.domain }],
+    identifiers: [{ type: state.certType, value: state.identifierValue }],
   });
 
   const orderUrl = orderResponse.location || orderResponse.response.headers.get("Location");
@@ -572,7 +751,7 @@ async function startAcmeOrder() {
     throw new Error("No supported challenge found. Expected http-01 or dns-01.");
   }
 
-  state.step = 2;
+  state.step = 3;
   pushLog(`Challenge selected: ${state.selectedChallengeType}`);
   setAlert("success", "Order created. Publish your challenge response and continue.");
 }
@@ -590,7 +769,7 @@ async function triggerChallenge() {
     throw new Error(`Authorization ended with status ${authorization.status}.`);
   }
 
-  state.step = 3;
+  state.step = 4;
   setAlert("success", "Authorization is valid. Continue to CSR and finalize.");
 }
 
@@ -606,7 +785,7 @@ async function finalizeOrder() {
   state.sessionDirty = true;
 
   pushLog("Creating CSR with forge...");
-  const csr = await createCsrBase64Url(state.domainKeyPair, state.domain);
+  const csr = await createCsrBase64Url(state.domainKeyPair, state.identifierValue, state.certType);
 
   pushLog("Submitting finalize request...");
   await acmePost(state.order.finalize, { csr });
@@ -618,7 +797,7 @@ async function finalizeOrder() {
   }
 
   await fetchCertificate(validOrder.certificate);
-  state.step = 4;
+  state.step = 5;
   setAlert("success", "Certificate issued successfully.");
 }
 
@@ -885,23 +1064,27 @@ async function createJwkThumbprint(jwk) {
   return base64UrlFromArrayBuffer(digest);
 }
 
-async function createCsrBase64Url(domainKeyPair, domain) {
+async function createCsrBase64Url(domainKeyPair, identifierValue, certType) {
   const privatePem = await exportPrivateKeyToPem(domainKeyPair.privateKey);
   const publicPem = await exportPublicKeyToPem(domainKeyPair.publicKey);
 
   const privateKey = forge.pki.privateKeyFromPem(privatePem);
   const publicKey = forge.pki.publicKeyFromPem(publicPem);
 
+  const subjectAltName = certType === "ip"
+    ? { type: 7, ip: identifierValue }
+    : { type: 2, value: identifierValue };
+
   const csr = forge.pki.createCertificationRequest();
   csr.publicKey = publicKey;
-  csr.setSubject([{ name: "commonName", value: domain }]);
+  csr.setSubject([{ name: "commonName", value: identifierValue }]);
   csr.setAttributes([
     {
       name: "extensionRequest",
       extensions: [
         {
           name: "subjectAltName",
-          altNames: [{ type: 2, value: domain }],
+          altNames: [subjectAltName],
         },
       ],
     },
@@ -926,8 +1109,24 @@ function binaryStringToUint8Array(value) {
   return result;
 }
 
-function normalizeDomain(value) {
+function normalizeIdentifierValue(value) {
   return value.trim().toLowerCase();
+}
+
+function isLikelyIpAddress(value) {
+  const maybeIpv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value);
+  if (maybeIpv4) {
+    return value.split(".").every((segment) => {
+      const numeric = Number(segment);
+      return numeric >= 0 && numeric <= 255;
+    });
+  }
+
+  return value.includes(":");
+}
+
+function getCertificateFileStem(value) {
+  return value.replace(/[^a-z0-9._-]/gi, "_");
 }
 
 function delay(ms) {
