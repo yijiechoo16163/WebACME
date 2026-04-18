@@ -10,7 +10,7 @@ WebACME is a static, browser-only ACME client prototype for issuing certificates
 - Builds CSR data in-browser using `forge`.
 - Provides a 4-step Bootstrap UI flow.
 - Step 1: Identity and account/order setup.
-- Step 2: Challenge details (http-01 or dns-01).
+- Step 2: Challenge details (http-01 or dns-01) with switchable method selection.
 - Step 3: CSR generation and order finalization.
 - Step 4: Certificate/key download.
 

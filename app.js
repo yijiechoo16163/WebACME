@@ -30,6 +30,8 @@ function createInitialState() {
     orderUrl: "",
     authorization: null,
     authorizationUrl: "",
+    availableChallenges: {},
+    selectedChallengeType: "",
     challenge: null,
     keyAuthorization: "",
     dnsTxtValue: "",
@@ -209,6 +211,8 @@ function renderStepIdentity() {
 
 function renderStepChallenge() {
   const challenge = state.challenge;
+  const availableTypes = Object.keys(state.availableChallenges);
+  const hasMethodChoices = availableTypes.length > 1;
   const isHttp = challenge?.type === "http-01";
   const isDns = challenge?.type === "dns-01";
 
@@ -219,6 +223,16 @@ function renderStepChallenge() {
     </div>
 
     <div class="row g-3">
+      <div class="col-12 col-md-7">
+        <label for="challengeTypeInput" class="form-label">Validation Method</label>
+        <select id="challengeTypeInput" class="form-select" ${state.busy ? "disabled" : ""}>
+          ${availableTypes.includes("http-01") ? `<option value="http-01" ${state.selectedChallengeType === "http-01" ? "selected" : ""}>HTTP-01</option>` : ""}
+          ${availableTypes.includes("dns-01") ? `<option value="dns-01" ${state.selectedChallengeType === "dns-01" ? "selected" : ""}>DNS-01</option>` : ""}
+        </select>
+      </div>
+      <div class="col-12">
+        <div class="alert alert-secondary mb-0">${hasMethodChoices ? "You can switch between HTTP-01 and DNS-01 at any time before authorization becomes valid." : "Only one challenge method is currently available for this authorization."}</div>
+      </div>
       <div class="col-12">
         <div class="card border-0 bg-light">
           <div class="card-body">
@@ -247,6 +261,26 @@ function renderStepChallenge() {
       </div>
     </div>
   `;
+
+  document.getElementById("challengeTypeInput").addEventListener("change", async (event) => {
+    if (state.busy) {
+      return;
+    }
+
+    const nextType = event.target.value;
+    if (nextType === state.selectedChallengeType) {
+      return;
+    }
+
+    try {
+      await runStep(`Switching validation method to ${nextType}...`, async () => {
+        await applyChallengeSelection(nextType);
+        pushLog(`Validation method switched to ${nextType}.`);
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
 
   document.getElementById("triggerChallengeBtn").addEventListener("click", async () => {
     if (state.busy) {
@@ -473,26 +507,12 @@ async function startAcmeOrder() {
   state.authorizationUrl = state.order.authorizations[0];
   const authorization = await fetchAuthorization();
 
-  const challenge =
-    authorization.challenges.find((item) => item.type === "http-01") ||
-    authorization.challenges.find((item) => item.type === "dns-01");
-
-  if (!challenge) {
+  if (!Object.keys(state.availableChallenges).length) {
     throw new Error("No supported challenge found. Expected http-01 or dns-01.");
   }
 
-  state.challenge = challenge;
-  state.keyAuthorization = `${challenge.token}.${state.accountThumbprint}`;
-
-  if (challenge.type === "dns-01") {
-    const digest = await crypto.subtle.digest("SHA-256", utf8Bytes(state.keyAuthorization));
-    state.dnsTxtValue = base64UrlFromArrayBuffer(digest);
-  } else {
-    state.dnsTxtValue = "";
-  }
-
   state.step = 2;
-  pushLog(`Challenge selected: ${challenge.type}`);
+  pushLog(`Challenge selected: ${state.selectedChallengeType}`);
   setAlert("success", "Order created. Publish your challenge response and continue.");
 }
 
@@ -544,7 +564,58 @@ async function finalizeOrder() {
 async function fetchAuthorization() {
   const response = await acmePost(state.authorizationUrl, null);
   state.authorization = response.data;
+  await syncChallengesFromAuthorization(state.authorization);
   return state.authorization;
+}
+
+async function syncChallengesFromAuthorization(authorization) {
+  const nextChallenges = buildChallengeMap(authorization?.challenges || []);
+  if (!Object.keys(nextChallenges).length) {
+    return;
+  }
+
+  state.availableChallenges = nextChallenges;
+
+  let preferredType = state.selectedChallengeType;
+  if (!preferredType || !state.availableChallenges[preferredType]) {
+    preferredType = state.availableChallenges["http-01"] ? "http-01" : "dns-01";
+  }
+
+  await applyChallengeSelection(preferredType, { silent: true });
+}
+
+function buildChallengeMap(challenges) {
+  const supported = {};
+  for (const challenge of challenges) {
+    if (challenge.type === "http-01" || challenge.type === "dns-01") {
+      supported[challenge.type] = challenge;
+    }
+  }
+  return supported;
+}
+
+async function applyChallengeSelection(type, options = {}) {
+  const { silent = false } = options;
+
+  const challenge = state.availableChallenges[type];
+  if (!challenge) {
+    throw new Error(`Challenge method ${type} is not available for this order.`);
+  }
+
+  state.selectedChallengeType = type;
+  state.challenge = challenge;
+  state.keyAuthorization = `${challenge.token}.${state.accountThumbprint}`;
+
+  if (challenge.type === "dns-01") {
+    const digest = await crypto.subtle.digest("SHA-256", utf8Bytes(state.keyAuthorization));
+    state.dnsTxtValue = base64UrlFromArrayBuffer(digest);
+  } else {
+    state.dnsTxtValue = "";
+  }
+
+  if (!silent) {
+    pushLog(`Challenge selected: ${challenge.type}`);
+  }
 }
 
 async function fetchOrder() {
