@@ -269,7 +269,11 @@ function renderCertificateRequestWorkflow() {
 function renderCertificateManagerList() {
   refs.stepper.innerHTML = "";
 
-  const requestRows = state.certificateRequests
+  const selectedAccount = getSavedAccountById(state.selectedAccountId);
+  const selectedAccountRequests = getCertificateRequestsForSelectedAccount();
+  const selectedAccountName = selectedAccount?.nickname || "(none)";
+
+  const requestRows = selectedAccountRequests
     .map((request) => {
       const providerLabel = getProviderLabel(request.providerId);
       const typeLabel = request.certType === "ip" ? "IP" : "DNS";
@@ -297,10 +301,14 @@ function renderCertificateManagerList() {
     <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
       <div>
         <h2 class="h5 mb-1">Certificate Manager</h2>
-        <p class="mini-note mb-0">Track your certificate requests and statuses. Start a new request whenever needed.</p>
+        <p class="mini-note mb-0">Showing certificate requests for selected account: ${escapeHtml(selectedAccountName)}.</p>
       </div>
       <button id="openRequestCertificateFlowBtn" class="btn btn-primary" type="button" ${state.busy ? "disabled" : ""}>Request Certificate</button>
     </div>
+
+    ${!selectedAccount
+      ? `<div class="alert alert-warning">Select an account in Account Manager first. Certificate Manager only shows requests under the selected account.</div>`
+      : ""}
 
     <div class="table-responsive">
       <table id="certificateRequestsTable" class="display table table-sm align-middle w-100">
@@ -323,7 +331,7 @@ function renderCertificateManagerList() {
   `;
 
   document.getElementById("openRequestCertificateFlowBtn")?.addEventListener("click", () => {
-    if (!state.accountReady) {
+    if (!selectedAccount) {
       setAlert("warning", "Select an ACME account first from Account Manager.");
       render();
       return;
@@ -1258,6 +1266,8 @@ function normalizeCertificateRequest(value) {
     status: typeof value.status === "string" ? value.status : "pending",
     certType: typeof value.certType === "string" ? value.certType : "dns",
     identifierValue: value.identifierValue.trim(),
+    accountId: typeof value.accountId === "string" ? value.accountId : "",
+    accountKid: typeof value.accountKid === "string" ? value.accountKid : "",
     providerId: typeof value.providerId === "string" ? value.providerId : "",
     environmentId: typeof value.environmentId === "string" ? value.environmentId : "",
     profile: typeof value.profile === "string" ? value.profile : "",
@@ -1279,6 +1289,8 @@ function createCertificateRequestRecord(data) {
     status: data.status || "pending",
     certType: data.certType,
     identifierValue: data.identifierValue,
+    accountId: data.accountId,
+    accountKid: data.accountKid,
     providerId: data.providerId,
     environmentId: data.environmentId,
     profile: data.profile,
@@ -1296,6 +1308,25 @@ function createCertificateRequestRecord(data) {
   persistCertificateRequests(state.certificateRequests);
   state.activeRequestId = request.id;
   return request;
+}
+
+function getCertificateRequestsForSelectedAccount() {
+  const selectedAccount = getSavedAccountById(state.selectedAccountId);
+  if (!selectedAccount) {
+    return [];
+  }
+
+  return state.certificateRequests.filter((request) => {
+    if (request.accountId) {
+      return request.accountId === selectedAccount.id;
+    }
+
+    if (request.accountKid) {
+      return request.accountKid === selectedAccount.accountKid;
+    }
+
+    return false;
+  });
 }
 
 function updateCertificateRequestRecord(requestId, updates) {
@@ -1804,6 +1835,8 @@ async function createAcmeOrder() {
     status: state.order.status || "pending",
     certType: state.certType,
     identifierValue: state.identifierValue,
+    accountId: state.selectedAccountId,
+    accountKid: state.accountKid,
     providerId: state.provider,
     environmentId: state.environment,
     profile: state.profile,
