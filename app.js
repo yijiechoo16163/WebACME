@@ -255,18 +255,32 @@ function renderStepChallenge() {
             <h3 class="h6">Challenge Instructions</h3>
             ${isHttp ? `
               <p class="mb-2"><strong>Filename:</strong></p>
-              <div class="challenge-box mb-3">.well-known/acme-challenge/${escapeHtml(challenge.token)}</div>
-              <p class="mb-2"><strong>Content:</strong></p>
-              <div class="challenge-box mb-3">${escapeHtml(state.keyAuthorization)}</div>
-              <button id="downloadHttpChallengeBtn" class="btn btn-outline-secondary btn-sm" type="button" ${state.busy ? "disabled" : ""}>
-                Download HTTP-01 Challenge File
+              <div class="challenge-box mb-2">.well-known/acme-challenge/${escapeHtml(challenge.token)}</div>
+              <button id="copyHttpPathBtn" class="btn btn-outline-secondary btn-sm mb-3" type="button" ${state.busy ? "disabled" : ""}>
+                Copy Filename Path
               </button>
+              <p class="mb-2"><strong>Content:</strong></p>
+              <div class="challenge-box mb-2">${escapeHtml(state.keyAuthorization)}</div>
+              <button id="copyHttpContentBtn" class="btn btn-outline-secondary btn-sm mb-3" type="button" ${state.busy ? "disabled" : ""}>
+                Copy Content
+              </button>
+              <div>
+                <button id="downloadHttpChallengeBtn" class="btn btn-outline-secondary btn-sm" type="button" ${state.busy ? "disabled" : ""}>
+                  Download HTTP-01 Challenge File
+                </button>
+              </div>
             ` : ""}
             ${isDns ? `
               <p class="mb-2"><strong>TXT Record Name:</strong></p>
-              <div class="challenge-box mb-3">_acme-challenge.${escapeHtml(state.domain)}</div>
+              <div class="challenge-box mb-2">_acme-challenge.${escapeHtml(state.domain)}</div>
+              <button id="copyDnsNameBtn" class="btn btn-outline-secondary btn-sm mb-3" type="button" ${state.busy ? "disabled" : ""}>
+                Copy TXT Record Name
+              </button>
               <p class="mb-2"><strong>TXT Record Value:</strong></p>
-              <div class="challenge-box mb-3">${escapeHtml(state.dnsTxtValue)}</div>
+              <div class="challenge-box mb-2">${escapeHtml(state.dnsTxtValue)}</div>
+              <button id="copyDnsValueBtn" class="btn btn-outline-secondary btn-sm mb-3" type="button" ${state.busy ? "disabled" : ""}>
+                Copy TXT Record Value
+              </button>
               <p class="mini-note mb-0">For dns-01, this value is SHA-256(keyAuthorization) in base64url format.</p>
             ` : ""}
           </div>
@@ -309,16 +323,24 @@ function renderStepChallenge() {
   }
 
   if (isHttp) {
+    bindCopyButton("copyHttpPathBtn", `.well-known/acme-challenge/${state.challenge.token}`, "HTTP challenge filename path");
+    bindCopyButton("copyHttpContentBtn", state.keyAuthorization, "HTTP challenge content");
+
     document.getElementById("downloadHttpChallengeBtn").addEventListener("click", () => {
       if (!state.challenge?.token || !state.keyAuthorization) {
         handleError(new Error("HTTP challenge data is incomplete."));
         return;
       }
 
-        downloadTextFile(state.challenge.token, state.keyAuthorization, "application/octet-stream");
+      downloadTextFile(state.challenge.token, state.keyAuthorization, "application/octet-stream");
       pushLog(`Downloaded HTTP-01 challenge file: ${state.challenge.token}`);
       renderLog();
     });
+  }
+
+  if (isDns) {
+    bindCopyButton("copyDnsNameBtn", `_acme-challenge.${state.domain}`, "DNS TXT record name");
+    bindCopyButton("copyDnsValueBtn", state.dnsTxtValue, "DNS TXT record value");
   }
 
   document.getElementById("triggerChallengeBtn").addEventListener("click", async () => {
@@ -952,6 +974,46 @@ function downloadTextFile(filename, content, mimeType = "text/plain;charset=utf-
   link.click();
   link.remove();
   URL.revokeObjectURL(objectUrl);
+}
+
+function bindCopyButton(buttonId, value, label) {
+  const button = document.getElementById(buttonId);
+  if (!button) {
+    return;
+  }
+
+  button.addEventListener("click", async () => {
+    try {
+      await copyTextToClipboard(value);
+      pushLog(`Copied ${label}.`);
+      renderLog();
+    } catch {
+      handleError(new Error(`Failed to copy ${label}.`));
+    }
+  });
+}
+
+async function copyTextToClipboard(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = value;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.left = "-9999px";
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  const copied = document.execCommand("copy");
+  textArea.remove();
+
+  if (!copied) {
+    throw new Error("Clipboard API unavailable.");
+  }
 }
 
 function escapeHtml(value) {
