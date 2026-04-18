@@ -1176,7 +1176,13 @@ async function createCsrBase64Url(domainKeyPair, identifierValue, certType) {
 
   const csr = forge.pki.createCertificationRequest();
   csr.publicKey = publicKey;
-  csr.setSubject([{ name: "commonName", value: identifierValue }]);
+  // Let's Encrypt rejects CSRs that contain an IP address in the Common Name.
+  // For IP identifiers, keep subject empty and rely on SAN only.
+  if (certType === "ip") {
+    csr.setSubject([]);
+  } else {
+    csr.setSubject([{ name: "commonName", value: identifierValue }]);
+  }
   csr.setAttributes([
     {
       name: "extensionRequest",
