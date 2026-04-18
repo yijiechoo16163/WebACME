@@ -13,7 +13,7 @@ const ACME_PROVIDERS = {
       staging: "https://acme-staging-v02.api.letsencrypt.org/directory",
       production: "https://acme-v02.api.letsencrypt.org/directory",
     },
-    ipCsrExperimentalCn: "acme-ip-test.invalid",
+    ipCsrExperimentalCn: "example",
     defaultProfile: "classic",
     defaultIdentifierTypes: ["dns"],
     profileIdentifierTypes: {
