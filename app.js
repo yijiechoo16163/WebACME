@@ -86,7 +86,7 @@ const refs = {
   navAccountManagerBtn: document.getElementById("navAccountManagerBtn"),
   navRequestCertBtn: document.getElementById("navRequestCertBtn"),
   navRevokeCertBtn: document.getElementById("navRevokeCertBtn"),
-  purgeAccountsBtn: document.getElementById("purgeAccountsBtn"),
+  currentSelectionLabel: document.getElementById("currentSelectionLabel"),
 };
 
 init();
@@ -117,13 +117,6 @@ function bindGlobalActions() {
       return;
     }
     setActivePage(PAGE_IDS.REVOKE_CERT);
-  });
-
-  refs.purgeAccountsBtn.addEventListener("click", () => {
-    if (state.busy) {
-      return;
-    }
-    purgeAllSavedAccounts();
   });
 }
 
@@ -167,6 +160,15 @@ function renderNav() {
     item.element.classList.toggle("btn-light", isActive);
     item.element.classList.toggle("btn-outline-light", !isActive);
   });
+
+  const selectedAccount = getSavedAccountById(state.selectedAccountId);
+  const selectedAccountLabel = selectedAccount
+    ? selectedAccount.nickname
+    : (state.accountReady && state.accountNickname ? state.accountNickname : "(none)");
+
+  if (refs.currentSelectionLabel) {
+    refs.currentSelectionLabel.textContent = `Current selection: ${selectedAccountLabel}`;
+  }
 }
 
 function renderAlert() {
@@ -263,14 +265,6 @@ function renderStepAccountInit() {
       return `<option value="${environmentId}" ${selected}>${label}</option>`;
     })
     .join("");
-  const savedAccountOptions = state.savedAccounts
-    .map((account) => {
-      const selected = account.id === state.selectedAccountId ? "selected" : "";
-      const providerLabel = getProviderLabel(account.providerId);
-      const optionLabel = `${account.nickname} (${providerLabel} / ${account.environmentId})`;
-      return `<option value="${account.id}" ${selected}>${escapeHtml(optionLabel)}</option>`;
-    })
-    .join("");
   const savedAccountRows = state.savedAccounts
     .map((account) => {
       const providerLabel = getProviderLabel(account.providerId);
@@ -342,24 +336,10 @@ function renderStepAccountInit() {
         <div class="d-flex gap-2 flex-wrap mb-2">
           <button id="exportAccountsBtn" class="btn btn-outline-secondary" type="button" ${!state.savedAccounts.length || state.busy ? "disabled" : ""}>Export Saved Accounts</button>
           <button id="importAccountsBtn" class="btn btn-outline-secondary" type="button" ${state.busy ? "disabled" : ""}>Import Accounts JSON</button>
+          <button id="purgeAccountsBtn" class="btn btn-outline-danger" type="button" ${!state.savedAccounts.length || state.busy ? "disabled" : ""}>Purge Saved Accounts</button>
           <input id="importAccountsInput" class="d-none" type="file" accept=".json,application/json" />
         </div>
         <p class="mini-note mb-3">Export/import includes ACME account private keys. Keep the JSON file in a secure place.</p>
-
-        <div class="row g-2 mb-3">
-          <div class="col-md-8">
-            <label for="savedAccountInput" class="form-label">Select Saved ACME Account</label>
-            <select id="savedAccountInput" class="form-select" ${state.busy || !state.savedAccounts.length ? "disabled" : ""}>
-              <option value="">Choose an account...</option>
-              ${savedAccountOptions}
-            </select>
-          </div>
-          <div class="col-md-4 d-flex align-items-end">
-            <button id="useSelectedAccountBtn" class="btn btn-outline-primary w-100" type="button" ${state.busy || !state.savedAccounts.length ? "disabled" : ""}>
-              Use Selected Account
-            </button>
-          </div>
-        </div>
 
         ${state.savedAccounts.length
           ? `
@@ -391,31 +371,6 @@ function renderStepAccountInit() {
       state.environment = availableEnvironments[0];
     }
     render();
-  });
-
-  document.getElementById("savedAccountInput")?.addEventListener("change", (event) => {
-    state.selectedAccountId = event.target.value;
-  });
-
-  document.getElementById("useSelectedAccountBtn")?.addEventListener("click", async () => {
-    if (state.busy) {
-      return;
-    }
-
-    const selectedAccountId = document.getElementById("savedAccountInput")?.value || state.selectedAccountId;
-    if (!selectedAccountId) {
-      setAlert("warning", "Select an ACME account from the list first.");
-      render();
-      return;
-    }
-
-    try {
-      await runStep("Loading saved ACME account...", async () => {
-        await loadSavedAcmeAccount(selectedAccountId);
-      });
-    } catch (error) {
-      handleError(error);
-    }
   });
 
   document.querySelectorAll("[data-account-action]").forEach((button) => {
@@ -491,6 +446,14 @@ function renderStepAccountInit() {
     } catch (error) {
       handleError(error);
     }
+  });
+
+  document.getElementById("purgeAccountsBtn")?.addEventListener("click", () => {
+    if (state.busy) {
+      return;
+    }
+
+    purgeAllSavedAccounts();
   });
 
   const importAccountsInput = document.getElementById("importAccountsInput");
@@ -1425,7 +1388,6 @@ async function loadSavedAcmeAccount(accountId) {
 
   state.accountReady = true;
   state.step = 2;
-  state.page = PAGE_IDS.REQUEST_CERT;
 
   pushLog(`Loaded saved ACME account "${account.nickname}".`);
 }

@@ -80,6 +80,17 @@ body {
   min-width: 7.4rem;
 }
 
+.current-selection-label {
+  align-self: center;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #d7e9fb;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 0.55rem;
+  padding: 0.38rem 0.58rem;
+  white-space: nowrap;
+}
+
 .stepper {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -226,6 +237,11 @@ textarea.form-control.output-block {
   .app-top-nav .btn {
     flex: 1 1 0;
     min-width: 0;
+  }
+
+  .current-selection-label {
+    width: 100%;
+    white-space: normal;
   }
 
   .stepper {

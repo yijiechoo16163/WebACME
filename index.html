@@ -32,7 +32,7 @@
                   <button id="navRequestCertBtn" class="btn btn-sm btn-outline-light" type="button">Request Cert</button>
                   <button id="navRevokeCertBtn" class="btn btn-sm btn-outline-light" type="button">Revoke Cert</button>
                 </div>
-                <button id="purgeAccountsBtn" class="btn btn-sm btn-light" type="button">Purge Saved Accounts</button>
+                <div id="currentSelectionLabel" class="current-selection-label">Current selection: (none)</div>
               </div>
             </div>
 
@@ -51,7 +51,7 @@
                   <li>Private keys are generated in browser memory with WebCrypto.</li>
                   <li>If you save an ACME account, its account key and metadata are stored in this browser&apos;s local storage.</li>
                   <li>No backend relay is used. ACME requests are sent directly to Let&apos;s Encrypt.</li>
-                  <li>Use the Purge Saved Accounts button to remove saved ACME accounts from this browser.</li>
+                  <li>Use the Purge Saved Accounts action in Account Manager to remove saved ACME accounts from this browser.</li>
                 </ul>
               </details>
 
