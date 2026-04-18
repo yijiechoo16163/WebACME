@@ -34,6 +34,7 @@ const ACME_PROVIDERS = {
 };
 
 const ACME_ACCOUNT_STORAGE_KEY = "webacme.savedAcmeAccounts.v1";
+const providerDirectoryMetaCache = new Map();
 
 function createInitialState() {
   return {
@@ -46,6 +47,11 @@ function createInitialState() {
     accountNickname: "",
     provider: "letsencrypt",
     environment: "staging",
+    providerTermsOfServiceUrl: "",
+    providerWebsiteUrl: "",
+    providerMetaLoading: false,
+    providerMetaError: "",
+    providerMetaRequestId: 0,
     savedAccounts: loadSavedAccounts(),
     selectedAccountId: "",
     accountReady: false,
@@ -95,6 +101,7 @@ function init() {
   bindGlobalActions();
   state.savedAccounts = loadSavedAccounts();
   render();
+  refreshProviderMetadataPreview();
 }
 
 function bindGlobalActions() {
@@ -252,12 +259,40 @@ function renderRevokeCertPage() {
 
 function renderStepAccountInit() {
   const provider = getProviderConfig(state.provider);
+  const providerLabel = provider.label;
   const providerOptions = Object.entries(ACME_PROVIDERS)
     .map(([providerId, providerConfig]) => {
       const selected = providerId === state.provider ? "selected" : "";
       return `<option value="${providerId}" ${selected}>${escapeHtml(providerConfig.label)}</option>`;
     })
     .join("");
+  let termsAcknowledgementHtml = "";
+
+  if (state.providerMetaLoading) {
+    termsAcknowledgementHtml = `
+      <div class="alert alert-secondary mb-0">
+        Loading provider Terms of Service details...
+      </div>
+    `;
+  } else if (state.providerTermsOfServiceUrl) {
+    const websiteHint = state.providerWebsiteUrl
+      ? ` You can also visit the provider website: <a href="${escapeHtml(state.providerWebsiteUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(state.providerWebsiteUrl)}</a>.`
+      : "";
+
+    termsAcknowledgementHtml = `
+      <div class="alert alert-secondary mb-0">
+        By creating an ACME account with ${escapeHtml(providerLabel)}, you acknowledged that you agreed to the Terms of Service of the provider:
+        <a href="${escapeHtml(state.providerTermsOfServiceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(state.providerTermsOfServiceUrl)}</a>.${websiteHint}
+      </div>
+    `;
+  } else {
+    termsAcknowledgementHtml = `
+      <div class="alert alert-secondary mb-0">
+        By creating an ACME account with ${escapeHtml(providerLabel)}, you acknowledged that you agreed to the Terms of Service of the provider.
+        This ACME directory did not advertise a termsOfService URL in metadata.
+      </div>
+    `;
+  }
   const environmentOptions = Object.keys(provider.environments)
     .map((environmentId) => {
       const selected = environmentId === state.environment ? "selected" : "";
@@ -316,6 +351,9 @@ function renderStepAccountInit() {
         <label for="environmentInput" class="form-label">Provider Environment</label>
         <select id="environmentInput" class="form-select">${environmentOptions}</select>
       </div>
+      <div class="col-12">
+        ${termsAcknowledgementHtml}
+      </div>
       <div class="col-12 d-flex gap-2 flex-wrap">
         <button class="btn btn-primary" id="initAccountBtn" type="submit" ${state.busy ? "disabled" : ""}>
           ${state.busy ? "Working..." : "Create ACME Account And Save"}
@@ -370,7 +408,12 @@ function renderStepAccountInit() {
     if (!availableEnvironments.includes(state.environment)) {
       state.environment = availableEnvironments[0];
     }
-    render();
+    refreshProviderMetadataPreview();
+  });
+
+  document.getElementById("environmentInput").addEventListener("change", (event) => {
+    state.environment = event.target.value;
+    refreshProviderMetadataPreview();
   });
 
   document.querySelectorAll("[data-account-action]").forEach((button) => {
@@ -948,6 +991,7 @@ function purgeAllSavedAccounts() {
   pushLog("All saved ACME accounts were purged from browser storage.");
   setAlert("success", "Saved ACME accounts purged.");
   render();
+  refreshProviderMetadataPreview();
 }
 
 function getProviderConfig(providerId = state.provider) {
@@ -965,6 +1009,54 @@ function getDirectoryUrlForSelection() {
     throw new Error(`Environment ${state.environment} is not available for ${providerConfig.label}.`);
   }
   return directoryUrl;
+}
+
+function applyProviderDirectoryMeta(meta = {}) {
+  state.providerTermsOfServiceUrl = typeof meta.termsOfService === "string" ? meta.termsOfService : "";
+  state.providerWebsiteUrl = typeof meta.website === "string" ? meta.website : "";
+}
+
+async function refreshProviderMetadataPreview(options = {}) {
+  const { suppressErrors = true } = options;
+  const requestId = state.providerMetaRequestId + 1;
+  state.providerMetaRequestId = requestId;
+  state.providerMetaLoading = true;
+  state.providerMetaError = "";
+  render();
+
+  try {
+    const directoryUrl = getDirectoryUrlForSelection();
+    const cacheKey = `${state.provider}|${state.environment}`;
+    let directory;
+
+    if (providerDirectoryMetaCache.has(cacheKey)) {
+      directory = providerDirectoryMetaCache.get(cacheKey);
+    } else {
+      directory = await fetchJson(directoryUrl);
+      providerDirectoryMetaCache.set(cacheKey, directory);
+    }
+
+    if (state.providerMetaRequestId !== requestId) {
+      return;
+    }
+
+    applyProviderDirectoryMeta(directory?.meta || {});
+  } catch (error) {
+    if (state.providerMetaRequestId !== requestId) {
+      return;
+    }
+
+    applyProviderDirectoryMeta({});
+    state.providerMetaError = error instanceof Error ? error.message : String(error);
+    if (!suppressErrors) {
+      throw error;
+    }
+  } finally {
+    if (state.providerMetaRequestId === requestId) {
+      state.providerMetaLoading = false;
+      render();
+    }
+  }
 }
 
 function getAllowedIdentifierTypesForProfile(providerConfig, profileId) {
@@ -1373,6 +1465,7 @@ async function loadSavedAcmeAccount(accountId) {
   const directoryUrl = getDirectoryUrlForSelection();
   pushLog(`Loading ACME directory: ${directoryUrl}`);
   state.directory = await fetchJson(directoryUrl);
+  applyProviderDirectoryMeta(state.directory?.meta || {});
   syncProfilesFromDirectory();
 
   state.accountPrivateKeyPem = account.accountPrivateKeyPem;
@@ -1403,6 +1496,7 @@ async function initializeAcmeAccount() {
   const directoryUrl = getDirectoryUrlForSelection();
   pushLog(`Loading ACME directory: ${directoryUrl}`);
   state.directory = await fetchJson(directoryUrl);
+  applyProviderDirectoryMeta(state.directory?.meta || {});
   syncProfilesFromDirectory();
   if (state.profile) {
     pushLog(`Selected ACME profile: ${state.profile}`);
