@@ -1,60 +1,47 @@
 # WebACME
 
-WebACME is a browser-only ACME client prototype for managing ACME accounts and requesting certificates without backend code.
+WebACME is a minimalist, stateless, client-side ACME interface for Let's Encrypt.
 
-## App Structure
+## What It Does
 
-The UI now uses page-style top navigation:
+- Uses a clean Bootstrap 5 interface with a Production/Staging mode switch.
+- Supports selectable `HTTP-01` and `DNS-01` validation methods.
+- Generates all keys in-browser via WebCrypto.
+- Creates CSR in-browser via Forge.
+- Talks directly to ACME endpoints with `fetch` and signed JWS requests.
+- Never stores keys in localStorage/sessionStorage.
 
-1. Account Manager page
-2. Request Cert page
-3. Revoke Cert page (placeholder for future implementation)
-
-The top-right action button is now Purge Saved Accounts, which removes all saved ACME accounts from browser storage.
-
-## Features
-
-- Runs entirely in the browser (HTML/CSS/JS).
-- Uses WebCrypto for account and domain key generation and request signing.
-- Calls ACME directory/order/challenge endpoints directly with fetch.
-- Builds CSR data in-browser with forge.
-- Supports provider-aware certificate profiles and identifier types (DNS/IP for supported profiles).
-- Stores multiple ACME accounts locally with nickname, provider, environment, and creation timestamp.
-- Supports account selection, rename, delete, export, and import from Account Manager.
-- Request Cert page drives the issuance workflow from configuration through certificate download.
-
-## Storage Model
-
-- Saved ACME account records are stored in browser local storage.
-- Export/import uses JSON files so accounts can be moved across devices/browsers.
-- Purge Saved Accounts removes the saved account store from this browser.
+Refreshing the page intentionally resets the entire session.
 
 ## Files
 
-- index.html: App shell, top navigation, shared layout, and CDN dependencies.
-- styles.css: Theme styling, responsive layout, and account table styling.
-- app.js: Navigation state, account manager logic, ACME request flow, and storage helpers.
+- `index.html`: page structure, Bootstrap/Forge CDNs, app sections.
+- `styles.css`: minimalist visual styling and responsive layout.
+- `app.js`: ACME protocol flow and browser crypto logic.
 
-## Run Locally
+## Local Run
 
-Use an HTTP server instead of opening files directly:
+Any static server works. For example:
 
 ```bash
-cd /workspaces/WebACME
-python3 -m http.server 8080
+python3 -m http.server 8000
 ```
 
-Then open http://localhost:8080.
+Then open `http://localhost:8000`.
 
-## Deploy on GitHub Pages
+## User Flow
 
-1. Push this repository to GitHub.
-2. In repository settings, open Pages.
-3. Set source to Deploy from a branch and choose main + / (root).
-4. Save and wait for the Pages URL.
+1. Enter domains and optional email.
+2. Choose `HTTP-01` or `DNS-01`.
+3. Click **Generate Certificate**.
+4. Complete challenge requirements shown in copyable code blocks.
+5. For `HTTP-01`, open the check link in a new tab to verify file reachability.
+6. For `DNS-01`, use the DNS check button to verify TXT propagation.
+7. Click **Verify My Domain**.
+8. Copy certificate and private key from the results section.
 
 ## Notes
 
-- This project is a prototype and should be tested with staging before production.
-- Since account keys can be stored locally and exported, treat browser profile and export files as sensitive.
-- Revoke Cert page is intentionally scaffolded for future work.
+- `http-01` requires each domain to be reachable over HTTP.
+- Wildcard domains are allowed only when using `dns-01`.
+- Use Staging mode first to avoid production rate limits while testing.
