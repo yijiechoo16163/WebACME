@@ -329,7 +329,10 @@ function renderCertificateManagerList() {
       return;
     }
 
-    clearOrderContext();
+    clearOrderContext({ preserveDirectoryMetadata: true });
+    if (!state.availableProfileIds.length && state.directory) {
+      syncProfilesFromDirectory();
+    }
     state.certificateManagerMode = "request";
     state.step = 2;
     render();
@@ -1188,12 +1191,16 @@ function syncProfilesFromDirectory() {
   state.profile = state.availableProfileIds[0];
 }
 
-function clearOrderContext() {
+function clearOrderContext(options = {}) {
+  const { preserveDirectoryMetadata = false } = options;
+
   state.activeRequestId = "";
   state.identifierValue = "";
-  state.profile = "";
-  state.directoryProfiles = {};
-  state.availableProfileIds = [];
+  if (!preserveDirectoryMetadata) {
+    state.profile = "";
+    state.directoryProfiles = {};
+    state.availableProfileIds = [];
+  }
   state.order = null;
   state.orderUrl = "";
   state.authorization = null;
