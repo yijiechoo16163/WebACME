@@ -54,6 +54,8 @@ function createInitialState() {
     orderUrl: "",
     authorization: null,
     authorizationUrl: "",
+    authorizationUrls: [],
+    activeAuthorizationIndex: 0,
     availableChallenges: {},
     selectedChallengeType: "",
     challenge: null,
@@ -288,10 +290,14 @@ function renderStepCertificateConfig() {
       return `<option value="${item.id}" ${selected}>${escapeHtml(item.label)}</option>`;
     })
     .join("");
+  const includeDualIpDns = shouldIncludeDualIpDnsForLetsEncryptIp(state.provider, state.environment, state.certType);
   const identifierLabel = state.certType === "ip" ? "IP Address" : "Domain Name";
   const identifierHelp = state.certType === "ip"
     ? "Use a public IP address that you control."
     : "Use a domain such as example.com or www.example.com.";
+  const dualIpDnsNote = includeDualIpDns
+    ? "For Let's Encrypt IP requests, this flow will also include a DNS identifier and DNS SAN using the same value for compatibility testing."
+    : "";
 
   refs.content.innerHTML = `
     <div class="mb-3">
@@ -318,7 +324,7 @@ function renderStepCertificateConfig() {
       <div class="col-md-6">
         <label for="identifierInput" class="form-label">${identifierLabel}</label>
         <input id="identifierInput" class="form-control" type="text" placeholder="${escapeHtml(selectedCertType.placeholder || "example.com")}" value="${escapeHtml(state.identifierValue)}" required />
-        <div class="form-text">${identifierHelp}</div>
+        <div class="form-text">${identifierHelp}${dualIpDnsNote ? `<br />${dualIpDnsNote}` : ""}</div>
       </div>
       <div class="col-12 d-flex gap-2 flex-wrap">
         <button class="btn btn-primary" id="createOrderBtn" type="submit" ${state.busy ? "disabled" : ""}>
@@ -382,11 +388,16 @@ function renderStepChallenge() {
   const isDns = challenge?.type === "dns-01";
   const hasHttp = availableTypes.includes("http-01");
   const hasDns = availableTypes.includes("dns-01");
+  const totalAuthorizations = Math.max(1, state.authorizationUrls.length || 0);
+  const currentAuthorizationNumber = Math.min(state.activeAuthorizationIndex + 1, totalAuthorizations);
+  const currentIdentifier = state.authorization?.identifier
+    ? `${state.authorization.identifier.type}:${state.authorization.identifier.value}`
+    : "";
 
   refs.content.innerHTML = `
     <div class="mb-3">
-      <h2 class="h5">Step 3: Complete ${escapeHtml(challenge?.type || "")}</h2>
-      <p class="mini-note mb-0">Publish the token response, then notify Let&apos;s Encrypt and wait for authorization.</p>
+      <h2 class="h5">Step 3: Complete ${escapeHtml(challenge?.type || "")} (Authorization ${currentAuthorizationNumber}/${totalAuthorizations})</h2>
+      <p class="mini-note mb-0">Publish the token response, then notify Let&apos;s Encrypt and wait for authorization.${currentIdentifier ? ` Current identifier: ${escapeHtml(currentIdentifier)}.` : ""}</p>
     </div>
 
     <div class="row g-3">
@@ -529,8 +540,7 @@ function renderStepChallenge() {
       await runStep("Checking authorization status...", async () => {
         const auth = await fetchAuthorization();
         if (auth.status === "valid") {
-          state.step = 4;
-          pushLog("Authorization is valid. Proceed to CSR/finalize.");
+          await advanceAuthorizationFlowAfterValidCurrent();
         } else {
           pushLog(`Authorization is currently ${auth.status}.`);
         }
@@ -705,6 +715,27 @@ function getAllowedIdentifierTypesForProfile(providerConfig, profileId) {
   return providerConfig.defaultIdentifierTypes || ["dns"];
 }
 
+function shouldIncludeDualIpDnsForLetsEncryptIp(
+  providerId = state.provider,
+  environment = state.environment,
+  certType = state.certType
+) {
+  return providerId === "letsencrypt"
+    && certType === "ip"
+    && (environment === "staging" || environment === "production");
+}
+
+function buildOrderIdentifiers(identifierValue, certType, options = {}) {
+  const { includeDualIpDns = false } = options;
+  const identifiers = [{ type: certType, value: identifierValue }];
+
+  if (includeDualIpDns && certType === "ip") {
+    identifiers.push({ type: "dns", value: identifierValue });
+  }
+
+  return identifiers;
+}
+
 function syncProfilesFromDirectory() {
   const providerConfig = getProviderConfig();
   const directoryProfiles = state.directory?.meta?.profiles || {};
@@ -746,6 +777,8 @@ function clearOrderContext() {
   state.orderUrl = "";
   state.authorization = null;
   state.authorizationUrl = "";
+  state.authorizationUrls = [];
+  state.activeAuthorizationIndex = 0;
   state.availableChallenges = {};
   state.selectedChallengeType = "";
   state.challenge = null;
@@ -808,11 +841,17 @@ async function createAcmeOrder() {
   if (!allowedIdentifierTypes.includes(state.certType)) {
     throw new Error(`Profile ${state.profile || "default"} does not permit ${state.certType.toUpperCase()} identifiers.`);
   }
+  const includeDualIpDns = shouldIncludeDualIpDnsForLetsEncryptIp();
+  if (includeDualIpDns && !allowedIdentifierTypes.includes("dns")) {
+    throw new Error(`Profile ${state.profile || "default"} does not permit DNS identifiers required for the dual IP+DNS test.`);
+  }
 
   state.order = null;
   state.orderUrl = "";
   state.authorization = null;
   state.authorizationUrl = "";
+  state.authorizationUrls = [];
+  state.activeAuthorizationIndex = 0;
   state.availableChallenges = {};
   state.selectedChallengeType = "";
   state.challenge = null;
@@ -824,7 +863,7 @@ async function createAcmeOrder() {
 
   pushLog("Creating new order...");
   const orderPayload = {
-    identifiers: [{ type: state.certType, value: state.identifierValue }],
+    identifiers: buildOrderIdentifiers(state.identifierValue, state.certType, { includeDualIpDns }),
   };
   if (state.profile) {
     orderPayload.profile = state.profile;
@@ -843,16 +882,22 @@ async function createAcmeOrder() {
     throw new Error("Order does not include authorization URLs.");
   }
 
-  state.authorizationUrl = state.order.authorizations[0];
-  const authorization = await fetchAuthorization();
+  state.authorizationUrls = state.order.authorizations.slice();
+  state.authorizationUrl = state.authorizationUrls[0];
+  state.activeAuthorizationIndex = 0;
+
+  await fetchAuthorization();
 
   if (!Object.keys(state.availableChallenges).length) {
     throw new Error("No supported challenge found. Expected http-01 or dns-01.");
   }
 
   state.step = 3;
+  if (state.authorizationUrls.length > 1) {
+    pushLog(`Order contains ${state.authorizationUrls.length} authorizations. Complete each authorization in sequence.`);
+  }
   pushLog(`Challenge selected: ${state.selectedChallengeType}`);
-  setAlert("success", "Order created. Publish your challenge response and continue.");
+  setAlert("success", `Order created. Complete authorization ${state.activeAuthorizationIndex + 1}/${state.authorizationUrls.length}.`);
 }
 
 async function triggerChallenge() {
@@ -868,15 +913,34 @@ async function triggerChallenge() {
     throw new Error(`Authorization ended with status ${authorization.status}.`);
   }
 
+  await advanceAuthorizationFlowAfterValidCurrent();
+}
+
+async function advanceAuthorizationFlowAfterValidCurrent() {
+  const nextIndex = state.activeAuthorizationIndex + 1;
+  if (nextIndex < state.authorizationUrls.length) {
+    state.activeAuthorizationIndex = nextIndex;
+    state.authorizationUrl = state.authorizationUrls[nextIndex];
+    await fetchAuthorization();
+
+    if (!Object.keys(state.availableChallenges).length) {
+      throw new Error(`No supported challenge found for authorization ${nextIndex + 1}. Expected http-01 or dns-01.`);
+    }
+
+    pushLog(`Authorization ${nextIndex}/${state.authorizationUrls.length} is valid.`);
+    pushLog(`Proceeding to authorization ${nextIndex + 1}/${state.authorizationUrls.length}.`);
+    setAlert("info", `Authorization ${nextIndex}/${state.authorizationUrls.length} is valid. Continue with authorization ${nextIndex + 1}/${state.authorizationUrls.length}.`);
+    state.step = 3;
+    return;
+  }
+
   state.step = 4;
-  setAlert("success", "Authorization is valid. Continue to CSR and finalize.");
+  pushLog("All authorizations are valid. Proceed to CSR/finalize.");
+  setAlert("success", "All authorizations are valid. Continue to CSR and finalize.");
 }
 
 async function finalizeOrder() {
-  const latestAuth = await fetchAuthorization();
-  if (latestAuth.status !== "valid") {
-    throw new Error(`Authorization is ${latestAuth.status}. Complete challenge validation first.`);
-  }
+  await ensureAllAuthorizationsValid();
 
   pushLog("Generating domain key pair (RSA 2048)...");
   state.domainKeyPair = await generateRsaKeyPair();
@@ -884,7 +948,12 @@ async function finalizeOrder() {
   state.sessionDirty = true;
 
   pushLog("Creating CSR with forge...");
-  const csr = await createCsrBase64Url(state.domainKeyPair, state.identifierValue, state.certType);
+  const csr = await createCsrBase64Url(
+    state.domainKeyPair,
+    state.identifierValue,
+    state.certType,
+    { includeDualIpDns: shouldIncludeDualIpDnsForLetsEncryptIp() }
+  );
 
   pushLog("Submitting finalize request...");
   await acmePost(state.order.finalize, { csr });
@@ -901,13 +970,55 @@ async function finalizeOrder() {
 }
 
 async function fetchAuthorization() {
-  const response = await acmePost(state.authorizationUrl, null);
-  state.authorization = response.data;
-  await syncChallengesFromAuthorization(state.authorization);
-  return state.authorization;
+  return fetchAuthorizationAtUrl(state.authorizationUrl, { syncChallengeState: true });
+}
+
+async function fetchAuthorizationAtUrl(authorizationUrl, options = {}) {
+  const { syncChallengeState = false } = options;
+
+  if (!authorizationUrl) {
+    throw new Error("Authorization URL is missing.");
+  }
+
+  const response = await acmePost(authorizationUrl, null);
+  const authorization = response.data;
+
+  if (syncChallengeState) {
+    state.authorizationUrl = authorizationUrl;
+    state.authorization = authorization;
+    await syncChallengesFromAuthorization(authorization);
+  }
+
+  return authorization;
+}
+
+async function ensureAllAuthorizationsValid() {
+  const urls = state.authorizationUrls.length ? state.authorizationUrls : [state.authorizationUrl].filter(Boolean);
+  if (!urls.length) {
+    throw new Error("Order authorization URLs are missing.");
+  }
+
+  for (let index = 0; index < urls.length; index += 1) {
+    const authorization = await fetchAuthorizationAtUrl(urls[index], {
+      syncChallengeState: index === state.activeAuthorizationIndex,
+    });
+
+    if (authorization.status !== "valid") {
+      const identifierText = authorization.identifier
+        ? `${authorization.identifier.type}:${authorization.identifier.value}`
+        : "unknown";
+      throw new Error(`Authorization ${index + 1}/${urls.length} (${identifierText}) is ${authorization.status}. Complete challenge validation first.`);
+    }
+  }
 }
 
 async function syncChallengesFromAuthorization(authorization) {
+  state.availableChallenges = {};
+  state.selectedChallengeType = "";
+  state.challenge = null;
+  state.keyAuthorization = "";
+  state.dnsTxtValue = "";
+
   const nextChallenges = buildChallengeMap(authorization?.challenges || []);
   if (!Object.keys(nextChallenges).length) {
     return;
@@ -1163,16 +1274,22 @@ async function createJwkThumbprint(jwk) {
   return base64UrlFromArrayBuffer(digest);
 }
 
-async function createCsrBase64Url(domainKeyPair, identifierValue, certType) {
+async function createCsrBase64Url(domainKeyPair, identifierValue, certType, options = {}) {
+  const { includeDualIpDns = false } = options;
   const privatePem = await exportPrivateKeyToPem(domainKeyPair.privateKey);
   const publicPem = await exportPublicKeyToPem(domainKeyPair.publicKey);
 
   const privateKey = forge.pki.privateKeyFromPem(privatePem);
   const publicKey = forge.pki.publicKeyFromPem(publicPem);
 
-  const subjectAltName = certType === "ip"
-    ? { type: 7, ip: identifierValue }
-    : { type: 2, value: identifierValue };
+  const subjectAltNames = certType === "ip"
+    ? includeDualIpDns
+      ? [
+        { type: 7, ip: identifierValue },
+        { type: 2, value: identifierValue },
+      ]
+      : [{ type: 7, ip: identifierValue }]
+    : [{ type: 2, value: identifierValue }];
 
   const csr = forge.pki.createCertificationRequest();
   csr.publicKey = publicKey;
@@ -1189,7 +1306,7 @@ async function createCsrBase64Url(domainKeyPair, identifierValue, certType) {
       extensions: [
         {
           name: "subjectAltName",
-          altNames: [subjectAltName],
+          altNames: subjectAltNames,
         },
       ],
     },
