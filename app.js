@@ -1,5 +1,10 @@
-const STEPS = [
-  { id: 1, label: "Account Init" },
+const PAGE_IDS = {
+  ACCOUNT_MANAGER: "account-manager",
+  REQUEST_CERT: "request-cert",
+  REVOKE_CERT: "revoke-cert",
+};
+
+const REQUEST_STEPS = [
   { id: 2, label: "Certificate Config" },
   { id: 3, label: "Challenge" },
   { id: 4, label: "CSR & Finalize" },
@@ -32,6 +37,7 @@ const ACME_ACCOUNT_STORAGE_KEY = "webacme.savedAcmeAccounts.v1";
 
 function createInitialState() {
   return {
+    page: PAGE_IDS.ACCOUNT_MANAGER,
     step: 1,
     alert: null,
     busy: false,
@@ -67,7 +73,6 @@ function createInitialState() {
     domainKeyPair: null,
     domainPrivateKeyPem: "",
     certificatePem: "",
-    sessionDirty: false,
   };
 }
 
@@ -78,17 +83,10 @@ const refs = {
   alertRegion: document.getElementById("alertRegion"),
   content: document.getElementById("app-step-content"),
   eventLog: document.getElementById("eventLog"),
-  accountManagerBtn: document.getElementById("openAccountManagerBtn"),
-  exportAccountBtn: document.getElementById("exportAccountKeyBtn"),
-  exportDomainBtn: document.getElementById("exportDomainKeyBtn"),
-  resetSessionBtn: document.getElementById("resetSessionBtn"),
-};
-
-window.onbeforeunload = function onBeforeUnload() {
-  if (!state.sessionDirty) {
-    return undefined;
-  }
-  return "You will lose your keys and progress if you leave!";
+  navAccountManagerBtn: document.getElementById("navAccountManagerBtn"),
+  navRequestCertBtn: document.getElementById("navRequestCertBtn"),
+  navRevokeCertBtn: document.getElementById("navRevokeCertBtn"),
+  purgeAccountsBtn: document.getElementById("purgeAccountsBtn"),
 };
 
 init();
@@ -100,45 +98,44 @@ function init() {
 }
 
 function bindGlobalActions() {
-  refs.accountManagerBtn.addEventListener("click", () => {
+  refs.navAccountManagerBtn.addEventListener("click", () => {
     if (state.busy) {
       return;
     }
-
-    state.step = 1;
-    render();
+    setActivePage(PAGE_IDS.ACCOUNT_MANAGER);
   });
 
-  refs.exportAccountBtn.addEventListener("click", () => {
-    if (!state.accountPrivateKeyPem) {
+  refs.navRequestCertBtn.addEventListener("click", () => {
+    if (state.busy) {
       return;
     }
-    downloadTextFile("account-private-key.pem", state.accountPrivateKeyPem);
+    setActivePage(PAGE_IDS.REQUEST_CERT);
   });
 
-  refs.exportDomainBtn.addEventListener("click", () => {
-    if (!state.domainPrivateKeyPem) {
+  refs.navRevokeCertBtn.addEventListener("click", () => {
+    if (state.busy) {
       return;
     }
-    downloadTextFile("domain-private-key.pem", state.domainPrivateKeyPem);
+    setActivePage(PAGE_IDS.REVOKE_CERT);
   });
 
-  refs.resetSessionBtn.addEventListener("click", () => {
-    resetSession();
+  refs.purgeAccountsBtn.addEventListener("click", () => {
+    if (state.busy) {
+      return;
+    }
+    purgeAllSavedAccounts();
   });
 }
 
 function render() {
-  renderStepper();
+  renderNav();
   renderAlert();
-  renderCurrentStep();
+  renderCurrentPage();
   renderLog();
-  refs.exportAccountBtn.disabled = !state.accountPrivateKeyPem;
-  refs.exportDomainBtn.disabled = !state.domainPrivateKeyPem;
 }
 
 function renderStepper() {
-  refs.stepper.innerHTML = STEPS.map((step) => {
+  refs.stepper.innerHTML = REQUEST_STEPS.map((step, index) => {
     const classes = ["step-item"];
     if (state.step === step.id) {
       classes.push("active");
@@ -148,10 +145,28 @@ function renderStepper() {
     }
     return `
       <li class="${classes.join(" ")}">
-        <span class="step-number">${step.id}.</span>${step.label}
+        <span class="step-number">${index + 1}.</span>${step.label}
       </li>
     `;
   }).join("");
+}
+
+function renderNav() {
+  const navMap = [
+    { id: PAGE_IDS.ACCOUNT_MANAGER, element: refs.navAccountManagerBtn },
+    { id: PAGE_IDS.REQUEST_CERT, element: refs.navRequestCertBtn },
+    { id: PAGE_IDS.REVOKE_CERT, element: refs.navRevokeCertBtn },
+  ];
+
+  navMap.forEach((item) => {
+    if (!item.element) {
+      return;
+    }
+
+    const isActive = state.page === item.id;
+    item.element.classList.toggle("btn-light", isActive);
+    item.element.classList.toggle("btn-outline-light", !isActive);
+  });
 }
 
 function renderAlert() {
@@ -167,24 +182,70 @@ function renderAlert() {
   `;
 }
 
-function renderCurrentStep() {
-  if (state.step === 1) {
+function setActivePage(pageId) {
+  state.page = pageId;
+  render();
+}
+
+function renderCurrentPage() {
+  if (state.page === PAGE_IDS.ACCOUNT_MANAGER) {
+    refs.stepper.innerHTML = "";
     renderStepAccountInit();
     return;
   }
+
+  if (state.page === PAGE_IDS.REVOKE_CERT) {
+    refs.stepper.innerHTML = "";
+    renderRevokeCertPage();
+    return;
+  }
+
+  renderRequestCertPage();
+}
+
+function renderRequestCertPage() {
+  if (!state.accountReady) {
+    refs.stepper.innerHTML = "";
+    refs.content.innerHTML = `
+      <div class="alert alert-info mb-0">
+        Select or create an ACME account in Account Manager first, then return to Request Cert.
+      </div>
+    `;
+    return;
+  }
+
+  if (state.step < 2) {
+    state.step = 2;
+  }
+
+  renderStepper();
+
   if (state.step === 2) {
     renderStepCertificateConfig();
     return;
   }
+
   if (state.step === 3) {
     renderStepChallenge();
     return;
   }
+
   if (state.step === 4) {
     renderStepFinalize();
     return;
   }
+
   renderStepResult();
+}
+
+function renderRevokeCertPage() {
+  refs.content.innerHTML = `
+    <div class="mb-3">
+      <h2 class="h5">Revoke Cert</h2>
+      <p class="mini-note mb-0">This page is reserved for certificate revocation workflow and will be developed later.</p>
+    </div>
+    <div class="alert alert-secondary mb-0">Coming soon: revoke certificate by certificate + account credentials.</div>
+  `;
 }
 
 function renderStepAccountInit() {
@@ -240,8 +301,8 @@ function renderStepAccountInit() {
 
   refs.content.innerHTML = `
     <div class="mb-3">
-      <h2 class="h5">Step 1: ACME Account Initialization</h2>
-      <p class="mini-note mb-0">Create and save ACME accounts in your browser, then select any saved account to continue from Stage 2.</p>
+      <h2 class="h5">Account Manager</h2>
+      <p class="mini-note mb-0">Create and save ACME accounts in your browser, then open Request Cert when you are ready to issue a certificate.</p>
     </div>
 
     <form id="accountInitForm" class="row g-3">
@@ -260,11 +321,6 @@ function renderStepAccountInit() {
       <div class="col-md-6">
         <label for="environmentInput" class="form-label">Provider Environment</label>
         <select id="environmentInput" class="form-select">${environmentOptions}</select>
-      </div>
-      <div class="col-12">
-        <div class="alert alert-warning mb-0">
-          Leaving or refreshing during issuance can destroy in-memory keys and flow state.
-        </div>
       </div>
       <div class="col-12 d-flex gap-2 flex-wrap">
         <button class="btn btn-primary" id="initAccountBtn" type="submit" ${state.busy ? "disabled" : ""}>
@@ -501,8 +557,7 @@ function renderStepAccountInit() {
 
 function renderStepCertificateConfig() {
   if (!state.accountReady) {
-    state.step = 1;
-    render();
+    setActivePage(PAGE_IDS.ACCOUNT_MANAGER);
     return;
   }
 
@@ -917,10 +972,18 @@ function handleError(error) {
   render();
 }
 
-function resetSession() {
+function purgeAllSavedAccounts() {
+  const confirmed = window.confirm("This will remove all saved ACME accounts from this browser. Continue?");
+  if (!confirmed) {
+    return;
+  }
+
+  localStorage.removeItem(ACME_ACCOUNT_STORAGE_KEY);
   const fresh = createInitialState();
   Object.assign(state, fresh);
-  pushLog("Session reset complete. Saved ACME accounts are still available in Account Manager.");
+  state.page = PAGE_IDS.ACCOUNT_MANAGER;
+  pushLog("All saved ACME accounts were purged from browser storage.");
+  setAlert("success", "Saved ACME accounts purged.");
   render();
 }
 
@@ -1361,8 +1424,8 @@ async function loadSavedAcmeAccount(accountId) {
   await refreshNonce();
 
   state.accountReady = true;
-  state.sessionDirty = true;
   state.step = 2;
+  state.page = PAGE_IDS.REQUEST_CERT;
 
   pushLog(`Loaded saved ACME account "${account.nickname}".`);
 }
@@ -1388,7 +1451,6 @@ async function initializeAcmeAccount() {
   state.accountPrivateKeyPem = await exportPrivateKeyToPem(state.accountKeyPair.privateKey);
   state.accountJwk = await crypto.subtle.exportKey("jwk", state.accountKeyPair.publicKey);
   state.accountThumbprint = await createJwkThumbprint(state.accountJwk);
-  state.sessionDirty = true;
 
   await refreshNonce();
 
@@ -1406,6 +1468,7 @@ async function initializeAcmeAccount() {
   state.accountKid = accountKid;
   state.accountReady = true;
   state.step = 2;
+  state.page = PAGE_IDS.REQUEST_CERT;
   setAlert("success", "ACME account initialized. Continue to certificate configuration.");
 }
 
@@ -1492,7 +1555,6 @@ async function finalizeOrder() {
   pushLog("Generating domain key pair (RSA 2048)...");
   state.domainKeyPair = await generateRsaKeyPair();
   state.domainPrivateKeyPem = await exportPrivateKeyToPem(state.domainKeyPair.privateKey);
-  state.sessionDirty = true;
 
   pushLog("Creating CSR with forge...");
   const csr = await createCsrBase64Url(state.domainKeyPair, state.identifierValue, state.certType);

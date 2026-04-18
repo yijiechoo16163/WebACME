@@ -1,58 +1,60 @@
 # WebACME
 
-WebACME is a static, browser-only ACME client prototype for issuing certificates from Let's Encrypt without backend code.
+WebACME is a browser-only ACME client prototype for managing ACME accounts and requesting certificates without backend code.
 
-## What It Does
+## App Structure
+
+The UI now uses page-style top navigation:
+
+1. Account Manager page
+2. Request Cert page
+3. Revoke Cert page (placeholder for future implementation)
+
+The top-right action button is now Purge Saved Accounts, which removes all saved ACME accounts from browser storage.
+
+## Features
 
 - Runs entirely in the browser (HTML/CSS/JS).
-- Uses WebCrypto for account/domain key generation and request signing.
-- Calls Let's Encrypt ACME v2 endpoints directly with `fetch` (CORS-enabled).
-- Builds CSR data in-browser using `forge`.
-- Provides a 5-step Bootstrap UI flow.
-- Step 1: ACME account initialization (email + provider + environment).
-- Step 2: Certificate configuration (provider-tailored profile + cert type + domain/IP input).
-- Step 3: Challenge details (http-01 or dns-01) with switchable button-based method selection.
-- Step 4: CSR generation and order finalization.
-- Step 5: Certificate/key download.
+- Uses WebCrypto for account and domain key generation and request signing.
+- Calls ACME directory/order/challenge endpoints directly with fetch.
+- Builds CSR data in-browser with forge.
+- Supports provider-aware certificate profiles and identifier types (DNS/IP for supported profiles).
+- Stores multiple ACME accounts locally with nickname, provider, environment, and creation timestamp.
+- Supports account selection, rename, delete, export, and import from Account Manager.
+- Request Cert page drives the issuance workflow from configuration through certificate download.
+
+## Storage Model
+
+- Saved ACME account records are stored in browser local storage.
+- Export/import uses JSON files so accounts can be moved across devices/browsers.
+- Purge Saved Accounts removes the saved account store from this browser.
 
 ## Files
 
-- `index.html`: SPA shell and dependencies (Bootstrap + forge via CDN with SRI).
-- `styles.css`: custom visual theme, responsive layout, and stepper styles.
-- `app.js`: ACME flow implementation, WebCrypto helpers, CSR generation, and file downloads.
+- index.html: App shell, top navigation, shared layout, and CDN dependencies.
+- styles.css: Theme styling, responsive layout, and account table styling.
+- app.js: Navigation state, account manager logic, ACME request flow, and storage helpers.
 
 ## Run Locally
 
-Because this app uses browser APIs and cross-origin requests, use an HTTP server instead of opening the file directly:
+Use an HTTP server instead of opening files directly:
 
 ```bash
 cd /workspaces/WebACME
 python3 -m http.server 8080
 ```
 
-Then open <http://localhost:8080>.
+Then open http://localhost:8080.
 
 ## Deploy on GitHub Pages
 
 1. Push this repository to GitHub.
 2. In repository settings, open Pages.
-3. Set source to `Deploy from a branch` and choose `main` + `/ (root)`.
+3. Set source to Deploy from a branch and choose main + / (root).
 4. Save and wait for the Pages URL.
 
-## Important Safety Notes
+## Notes
 
-- This is a client-side prototype. If the page is refreshed mid-flow, in-memory keys/progress can be lost.
-- A `window.onbeforeunload` warning is included to reduce accidental data loss.
-- Use Let's Encrypt **staging** first to avoid production rate limits.
-- No backend means no server-side recovery of lost keys.
-
-## Current Scope
-
-- Let's Encrypt provider flow is implemented with staged setup for future provider expansion.
-- Certificate type options are profile-aware; for Let's Encrypt, IP identifiers are available when an IP-capable profile is selected.
-- Account and domain private key export buttons are included.
-- Session reset clears runtime state and localStorage.
-
-## Disclaimer
-
-Use for testing and educational purposes first. For production-grade certificate automation, add stronger persistence, robust retries, richer validation, and full multi-authorization handling.
+- This project is a prototype and should be tested with staging before production.
+- Since account keys can be stored locally and exported, treat browser profile and export files as sensitive.
+- Revoke Cert page is intentionally scaffolded for future work.

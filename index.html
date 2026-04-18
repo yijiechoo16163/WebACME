@@ -27,16 +27,12 @@
                 <p class="mb-0 small opacity-75">100% client-side ACME certificate issuance with WebCrypto</p>
               </div>
               <div class="d-flex flex-wrap gap-2 mt-3 mt-md-0">
-                <button id="openAccountManagerBtn" class="btn btn-sm btn-outline-light" type="button">
-                  Account Manager
-                </button>
-                <button id="exportAccountKeyBtn" class="btn btn-sm btn-outline-light" type="button" disabled>
-                  Export Account Key
-                </button>
-                <button id="exportDomainKeyBtn" class="btn btn-sm btn-outline-light" type="button" disabled>
-                  Export Domain Key
-                </button>
-                <button id="resetSessionBtn" class="btn btn-sm btn-light" type="button">Reset Session</button>
+                <div class="btn-group app-top-nav" role="group" aria-label="Main navigation">
+                  <button id="navAccountManagerBtn" class="btn btn-sm btn-outline-light" type="button">Account Manager</button>
+                  <button id="navRequestCertBtn" class="btn btn-sm btn-outline-light" type="button">Request Cert</button>
+                  <button id="navRevokeCertBtn" class="btn btn-sm btn-outline-light" type="button">Revoke Cert</button>
+                </div>
+                <button id="purgeAccountsBtn" class="btn btn-sm btn-light" type="button">Purge Saved Accounts</button>
               </div>
             </div>
 
@@ -55,7 +51,7 @@
                   <li>Private keys are generated in browser memory with WebCrypto.</li>
                   <li>If you save an ACME account, its account key and metadata are stored in this browser&apos;s local storage.</li>
                   <li>No backend relay is used. ACME requests are sent directly to Let&apos;s Encrypt.</li>
-                  <li>Refreshing or leaving this page can destroy active issuance session state, but saved accounts remain available.</li>
+                  <li>Use the Purge Saved Accounts button to remove saved ACME accounts from this browser.</li>
                 </ul>
               </details>
 
