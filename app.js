@@ -34,7 +34,9 @@ const ACME_PROVIDERS = {
 };
 
 const ACME_ACCOUNT_STORAGE_KEY = "webacme.savedAcmeAccounts.v1";
+const CERTIFICATE_REQUEST_STORAGE_KEY = "webacme.certificateRequests.v1";
 const providerDirectoryMetaCache = new Map();
+let certificateRequestsTableInstance = null;
 
 function createInitialState() {
   return {
@@ -53,6 +55,9 @@ function createInitialState() {
     providerMetaError: "",
     providerMetaRequestId: 0,
     savedAccounts: loadSavedAccounts(),
+    certificateRequests: loadCertificateRequests(),
+    certificateManagerMode: "list",
+    activeRequestId: "",
     selectedAccountId: "",
     accountReady: false,
     profile: "",
@@ -116,6 +121,7 @@ function bindGlobalActions() {
     if (state.busy) {
       return;
     }
+    state.certificateManagerMode = "list";
     setActivePage(PAGE_IDS.REQUEST_CERT);
   });
 
@@ -198,26 +204,39 @@ function setActivePage(pageId) {
 
 function renderCurrentPage() {
   if (state.page === PAGE_IDS.ACCOUNT_MANAGER) {
+    destroyCertificateRequestsDataTable();
     refs.stepper.innerHTML = "";
     renderStepAccountInit();
     return;
   }
 
   if (state.page === PAGE_IDS.REVOKE_CERT) {
+    destroyCertificateRequestsDataTable();
     refs.stepper.innerHTML = "";
     renderRevokeCertPage();
     return;
   }
 
-  renderRequestCertPage();
+  renderCertificateManagerPage();
 }
 
-function renderRequestCertPage() {
+function renderCertificateManagerPage() {
+  if (state.certificateManagerMode === "list") {
+    renderCertificateManagerList();
+    return;
+  }
+
+  renderCertificateRequestWorkflow();
+}
+
+function renderCertificateRequestWorkflow() {
+  destroyCertificateRequestsDataTable();
+
   if (!state.accountReady) {
     refs.stepper.innerHTML = "";
     refs.content.innerHTML = `
       <div class="alert alert-info mb-0">
-        Select or create an ACME account in Account Manager first, then return to Request Cert.
+        Select or create an ACME account in Account Manager first, then start a request from Certificate Manager.
       </div>
     `;
     return;
@@ -245,6 +264,78 @@ function renderRequestCertPage() {
   }
 
   renderStepResult();
+}
+
+function renderCertificateManagerList() {
+  refs.stepper.innerHTML = "";
+
+  const requestRows = state.certificateRequests
+    .map((request) => {
+      const providerLabel = getProviderLabel(request.providerId);
+      const typeLabel = request.certType === "ip" ? "IP" : "DNS";
+      const profileLabel = request.profile || "(default)";
+      const createdLabel = formatTimestamp(request.createdAt);
+      const updatedLabel = formatTimestamp(request.updatedAt || request.createdAt);
+
+      return `
+        <tr>
+          <td>${escapeHtml(truncateMiddle(request.id, 12))}</td>
+          <td>${escapeHtml(request.status || "unknown")}</td>
+          <td>${escapeHtml(typeLabel)}</td>
+          <td>${escapeHtml(request.identifierValue || "")}</td>
+          <td>${escapeHtml(providerLabel)}</td>
+          <td>${escapeHtml(request.environmentId || "")}</td>
+          <td>${escapeHtml(profileLabel)}</td>
+          <td>${escapeHtml(createdLabel)}</td>
+          <td>${escapeHtml(updatedLabel)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  refs.content.innerHTML = `
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+      <div>
+        <h2 class="h5 mb-1">Certificate Manager</h2>
+        <p class="mini-note mb-0">Track your certificate requests and statuses. Start a new request whenever needed.</p>
+      </div>
+      <button id="openRequestCertificateFlowBtn" class="btn btn-primary" type="button" ${state.busy ? "disabled" : ""}>Request Certificate</button>
+    </div>
+
+    <div class="table-responsive">
+      <table id="certificateRequestsTable" class="display table table-sm align-middle w-100">
+        <thead>
+          <tr>
+            <th>Request ID</th>
+            <th>Status</th>
+            <th>Type</th>
+            <th>Identifier</th>
+            <th>Provider</th>
+            <th>Environment</th>
+            <th>Profile</th>
+            <th>Created</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>${requestRows}</tbody>
+      </table>
+    </div>
+  `;
+
+  document.getElementById("openRequestCertificateFlowBtn")?.addEventListener("click", () => {
+    if (!state.accountReady) {
+      setAlert("warning", "Select an ACME account first from Account Manager.");
+      render();
+      return;
+    }
+
+    clearOrderContext();
+    state.certificateManagerMode = "request";
+    state.step = 2;
+    render();
+  });
+
+  initCertificateRequestsDataTable();
 }
 
 function renderRevokeCertPage() {
@@ -968,6 +1059,10 @@ function pushLog(message) {
 function handleError(error) {
   const message = error instanceof Error ? error.message : String(error);
   pushLog(`Error: ${message}`);
+  updateActiveCertificateRequest({
+    status: "failed",
+    errorMessage: message,
+  });
   setAlert("danger", message);
   render();
 }
@@ -1094,6 +1189,7 @@ function syncProfilesFromDirectory() {
 }
 
 function clearOrderContext() {
+  state.activeRequestId = "";
   state.identifierValue = "";
   state.profile = "";
   state.directoryProfiles = {};
@@ -1110,6 +1206,142 @@ function clearOrderContext() {
   state.domainKeyPair = null;
   state.domainPrivateKeyPem = "";
   state.certificatePem = "";
+}
+
+function loadCertificateRequests() {
+  try {
+    const serialized = localStorage.getItem(CERTIFICATE_REQUEST_STORAGE_KEY);
+    if (!serialized) {
+      return [];
+    }
+
+    const parsed = JSON.parse(serialized);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .map((item) => normalizeCertificateRequest(item))
+      .filter(Boolean)
+      .sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime());
+  } catch {
+    return [];
+  }
+}
+
+function normalizeCertificateRequest(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  if (typeof value.identifierValue !== "string" || !value.identifierValue.trim()) {
+    return null;
+  }
+
+  const createdAt = typeof value.createdAt === "string" && value.createdAt.trim()
+    ? value.createdAt
+    : new Date().toISOString();
+
+  const updatedAt = typeof value.updatedAt === "string" && value.updatedAt.trim()
+    ? value.updatedAt
+    : createdAt;
+
+  return {
+    id: typeof value.id === "string" && value.id.trim() ? value.id : `req_${Date.now()}`,
+    status: typeof value.status === "string" ? value.status : "pending",
+    certType: typeof value.certType === "string" ? value.certType : "dns",
+    identifierValue: value.identifierValue.trim(),
+    providerId: typeof value.providerId === "string" ? value.providerId : "",
+    environmentId: typeof value.environmentId === "string" ? value.environmentId : "",
+    profile: typeof value.profile === "string" ? value.profile : "",
+    orderUrl: typeof value.orderUrl === "string" ? value.orderUrl : "",
+    createdAt,
+    updatedAt,
+    errorMessage: typeof value.errorMessage === "string" ? value.errorMessage : "",
+  };
+}
+
+function persistCertificateRequests(requests) {
+  localStorage.setItem(CERTIFICATE_REQUEST_STORAGE_KEY, JSON.stringify(requests));
+}
+
+function createCertificateRequestRecord(data) {
+  const nowIso = new Date().toISOString();
+  const request = normalizeCertificateRequest({
+    id: `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    status: data.status || "pending",
+    certType: data.certType,
+    identifierValue: data.identifierValue,
+    providerId: data.providerId,
+    environmentId: data.environmentId,
+    profile: data.profile,
+    orderUrl: data.orderUrl,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    errorMessage: "",
+  });
+
+  if (!request) {
+    throw new Error("Unable to create certificate request record.");
+  }
+
+  state.certificateRequests = [request, ...state.certificateRequests];
+  persistCertificateRequests(state.certificateRequests);
+  state.activeRequestId = request.id;
+  return request;
+}
+
+function updateCertificateRequestRecord(requestId, updates) {
+  const requestIndex = state.certificateRequests.findIndex((item) => item.id === requestId);
+  if (requestIndex < 0) {
+    return;
+  }
+
+  const nextRequest = {
+    ...state.certificateRequests[requestIndex],
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const nextRequests = [...state.certificateRequests];
+  nextRequests[requestIndex] = nextRequest;
+  state.certificateRequests = nextRequests
+    .map((item) => normalizeCertificateRequest(item))
+    .filter(Boolean)
+    .sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime());
+
+  persistCertificateRequests(state.certificateRequests);
+}
+
+function updateActiveCertificateRequest(updates) {
+  if (!state.activeRequestId) {
+    return;
+  }
+  updateCertificateRequestRecord(state.activeRequestId, updates);
+}
+
+function destroyCertificateRequestsDataTable() {
+  if (certificateRequestsTableInstance && typeof certificateRequestsTableInstance.destroy === "function") {
+    certificateRequestsTableInstance.destroy();
+  }
+  certificateRequestsTableInstance = null;
+}
+
+function initCertificateRequestsDataTable() {
+  destroyCertificateRequestsDataTable();
+
+  const tableElement = document.getElementById("certificateRequestsTable");
+  if (!tableElement || typeof window.DataTable !== "function") {
+    return;
+  }
+
+  certificateRequestsTableInstance = new window.DataTable(tableElement, {
+    pageLength: 10,
+    order: [[7, "desc"]],
+    searching: true,
+    lengthChange: true,
+    info: true,
+  });
 }
 
 function loadSavedAccounts() {
@@ -1561,6 +1793,15 @@ async function createAcmeOrder() {
 
   state.order = orderResponse.data;
   state.orderUrl = orderUrl;
+  createCertificateRequestRecord({
+    status: state.order.status || "pending",
+    certType: state.certType,
+    identifierValue: state.identifierValue,
+    providerId: state.provider,
+    environmentId: state.environment,
+    profile: state.profile,
+    orderUrl,
+  });
 
   if (!Array.isArray(state.order.authorizations) || state.order.authorizations.length === 0) {
     throw new Error("Order does not include authorization URLs.");
@@ -1574,6 +1815,10 @@ async function createAcmeOrder() {
   }
 
   state.step = 3;
+  updateActiveCertificateRequest({
+    status: authorization.status === "valid" ? "authorized" : (state.order.status || "pending"),
+    errorMessage: "",
+  });
   pushLog(`Challenge selected: ${state.selectedChallengeType}`);
   setAlert("success", "Order created. Publish your challenge response and continue.");
 }
@@ -1583,6 +1828,10 @@ async function triggerChallenge() {
     throw new Error("Challenge URL is missing.");
   }
 
+  updateActiveCertificateRequest({
+    status: "validating",
+    errorMessage: "",
+  });
   await acmePost(state.challenge.url, {});
   pushLog("Challenge notified to ACME server.");
 
@@ -1592,6 +1841,10 @@ async function triggerChallenge() {
   }
 
   state.step = 4;
+  updateActiveCertificateRequest({
+    status: "authorized",
+    errorMessage: "",
+  });
   setAlert("success", "Authorization is valid. Continue to CSR and finalize.");
 }
 
@@ -1600,6 +1853,11 @@ async function finalizeOrder() {
   if (latestAuth.status !== "valid") {
     throw new Error(`Authorization is ${latestAuth.status}. Complete challenge validation first.`);
   }
+
+  updateActiveCertificateRequest({
+    status: "finalizing",
+    errorMessage: "",
+  });
 
   pushLog("Generating domain key pair (RSA 2048)...");
   state.domainKeyPair = await generateRsaKeyPair();
@@ -1619,6 +1877,10 @@ async function finalizeOrder() {
 
   await fetchCertificate(validOrder.certificate);
   state.step = 5;
+  updateActiveCertificateRequest({
+    status: "issued",
+    errorMessage: "",
+  });
   setAlert("success", "Certificate issued successfully.");
 }
 
@@ -1682,12 +1944,18 @@ async function applyChallengeSelection(type, options = {}) {
 async function fetchOrder() {
   const response = await acmePost(state.orderUrl, null);
   state.order = response.data;
+  updateActiveCertificateRequest({
+    status: state.order.status || "unknown",
+  });
   return state.order;
 }
 
 async function fetchCertificate(certificateUrl) {
   const response = await acmePost(certificateUrl, null, { expectText: true });
   state.certificatePem = response.data;
+  updateActiveCertificateRequest({
+    status: "issued",
+  });
 }
 
 async function pollAuthorizationUntilTerminal() {

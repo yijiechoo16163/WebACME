@@ -226,6 +226,23 @@ details > summary {
   color: #425268;
 }
 
+.dataTables_wrapper {
+  font-size: 0.9rem;
+}
+
+.dataTables_wrapper .dataTables_filter input,
+.dataTables_wrapper .dataTables_length select {
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  padding: 0.25rem 0.45rem;
+  background: #ffffff;
+  color: var(--ink);
+}
+
+table.dataTable tbody tr:hover {
+  background-color: #f6f8fb;
+}
+
 textarea.form-control.output-block {
   font-family: "IBM Plex Mono", ui-monospace, monospace;
   font-size: 0.82rem;
