@@ -13,6 +13,7 @@ const ACME_PROVIDERS = {
       staging: "https://acme-staging-v02.api.letsencrypt.org/directory",
       production: "https://acme-v02.api.letsencrypt.org/directory",
     },
+    ipCsrExperimentalCn: "acme-ip-test.invalid",
     defaultProfile: "classic",
     defaultIdentifierTypes: ["dns"],
     profileIdentifierTypes: {
@@ -288,10 +289,14 @@ function renderStepCertificateConfig() {
       return `<option value="${item.id}" ${selected}>${escapeHtml(item.label)}</option>`;
     })
     .join("");
+  const ipCsrExperimentalCn = getIpCsrExperimentalCommonName(state.provider, state.certType);
   const identifierLabel = state.certType === "ip" ? "IP Address" : "Domain Name";
   const identifierHelp = state.certType === "ip"
     ? "Use a public IP address that you control."
     : "Use a domain such as example.com or www.example.com.";
+  const ipCnExperimentNote = ipCsrExperimentalCn
+    ? `Experimental: for IP requests, CSR Common Name will be set to ${escapeHtml(ipCsrExperimentalCn)} while SAN remains IP.`
+    : "";
 
   refs.content.innerHTML = `
     <div class="mb-3">
@@ -318,7 +323,7 @@ function renderStepCertificateConfig() {
       <div class="col-md-6">
         <label for="identifierInput" class="form-label">${identifierLabel}</label>
         <input id="identifierInput" class="form-control" type="text" placeholder="${escapeHtml(selectedCertType.placeholder || "example.com")}" value="${escapeHtml(state.identifierValue)}" required />
-        <div class="form-text">${identifierHelp}</div>
+        <div class="form-text">${identifierHelp}${ipCnExperimentNote ? `<br />${ipCnExperimentNote}` : ""}</div>
       </div>
       <div class="col-12 d-flex gap-2 flex-wrap">
         <button class="btn btn-primary" id="createOrderBtn" type="submit" ${state.busy ? "disabled" : ""}>
@@ -705,6 +710,19 @@ function getAllowedIdentifierTypesForProfile(providerConfig, profileId) {
   return providerConfig.defaultIdentifierTypes || ["dns"];
 }
 
+function getIpCsrExperimentalCommonName(providerId = state.provider, certType = state.certType) {
+  if (certType !== "ip") {
+    return "";
+  }
+
+  const configuredValue = ACME_PROVIDERS[providerId]?.ipCsrExperimentalCn;
+  if (typeof configuredValue !== "string") {
+    return "";
+  }
+
+  return configuredValue.trim();
+}
+
 function syncProfilesFromDirectory() {
   const providerConfig = getProviderConfig();
   const directoryProfiles = state.directory?.meta?.profiles || {};
@@ -883,8 +901,18 @@ async function finalizeOrder() {
   state.domainPrivateKeyPem = await exportPrivateKeyToPem(state.domainKeyPair.privateKey);
   state.sessionDirty = true;
 
+  const ipCsrCommonName = getIpCsrExperimentalCommonName();
+  if (ipCsrCommonName) {
+    pushLog(`Using experimental CSR Common Name for IP request: ${ipCsrCommonName}`);
+  }
+
   pushLog("Creating CSR with forge...");
-  const csr = await createCsrBase64Url(state.domainKeyPair, state.identifierValue, state.certType);
+  const csr = await createCsrBase64Url(
+    state.domainKeyPair,
+    state.identifierValue,
+    state.certType,
+    { ipCsrCommonName }
+  );
 
   pushLog("Submitting finalize request...");
   await acmePost(state.order.finalize, { csr });
@@ -1163,7 +1191,8 @@ async function createJwkThumbprint(jwk) {
   return base64UrlFromArrayBuffer(digest);
 }
 
-async function createCsrBase64Url(domainKeyPair, identifierValue, certType) {
+async function createCsrBase64Url(domainKeyPair, identifierValue, certType, options = {}) {
+  const { ipCsrCommonName = "" } = options;
   const privatePem = await exportPrivateKeyToPem(domainKeyPair.privateKey);
   const publicPem = await exportPublicKeyToPem(domainKeyPair.publicKey);
 
@@ -1176,10 +1205,14 @@ async function createCsrBase64Url(domainKeyPair, identifierValue, certType) {
 
   const csr = forge.pki.createCertificationRequest();
   csr.publicKey = publicKey;
-  // Let's Encrypt rejects CSRs that contain an IP address in the Common Name.
-  // For IP identifiers, keep subject empty and rely on SAN only.
+  // For IP certificates, this supports testing a non-IP arbitrary CN value.
+  // Keep SAN as the actual IP identifier value.
   if (certType === "ip") {
-    csr.setSubject([]);
+    if (ipCsrCommonName) {
+      csr.setSubject([{ name: "commonName", value: ipCsrCommonName }]);
+    } else {
+      csr.setSubject([]);
+    }
   } else {
     csr.setSubject([{ name: "commonName", value: identifierValue }]);
   }
