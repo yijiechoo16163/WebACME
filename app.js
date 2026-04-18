@@ -13,6 +13,14 @@ const ACME_PROVIDERS = {
       staging: "https://acme-staging-v02.api.letsencrypt.org/directory",
       production: "https://acme-v02.api.letsencrypt.org/directory",
     },
+    defaultProfile: "classic",
+    defaultIdentifierTypes: ["dns"],
+    profileIdentifierTypes: {
+      classic: ["dns"],
+      tlsserver: ["dns"],
+      tlsclient: ["dns"],
+      shortlived: ["dns", "ip"],
+    },
     certTypes: [
       { id: "dns", label: "Domain Certificate", placeholder: "example.com" },
       { id: "ip", label: "IP Certificate", placeholder: "203.0.113.10 or 2001:db8::1" },
@@ -30,6 +38,9 @@ function createInitialState() {
     provider: "letsencrypt",
     environment: "staging",
     accountReady: false,
+    profile: "",
+    directoryProfiles: {},
+    availableProfileIds: [],
     certType: "dns",
     identifierValue: "",
     directory: null,
@@ -251,13 +262,26 @@ function renderStepCertificateConfig() {
   }
 
   const provider = getProviderConfig(state.provider);
-  const availableCertTypes = provider.certTypes || [{ id: "dns", label: "Domain Certificate", placeholder: "example.com" }];
+  const profileOptions = state.availableProfileIds
+    .map((profileId) => {
+      const selected = profileId === state.profile ? "selected" : "";
+      return `<option value="${profileId}" ${selected}>${escapeHtml(profileId)}</option>`;
+    })
+    .join("");
+  const allowedIdentifierTypes = getAllowedIdentifierTypesForProfile(provider, state.profile);
+  const availableCertTypes = (provider.certTypes || [{ id: "dns", label: "Domain Certificate", placeholder: "example.com" }])
+    .filter((item) => allowedIdentifierTypes.includes(item.id));
+
+  if (!availableCertTypes.length) {
+    throw new Error(`No supported certificate types for profile ${state.profile || "default"}.`);
+  }
 
   if (!availableCertTypes.some((item) => item.id === state.certType)) {
     state.certType = availableCertTypes[0].id;
   }
 
   const selectedCertType = availableCertTypes.find((item) => item.id === state.certType) || availableCertTypes[0];
+  const selectedProfileDocUrl = state.profile ? state.directoryProfiles[state.profile] : "";
   const certTypeOptions = availableCertTypes
     .map((item) => {
       const selected = item.id === state.certType ? "selected" : "";
@@ -277,6 +301,17 @@ function renderStepCertificateConfig() {
 
     <form id="certificateConfigForm" class="row g-3">
       <div class="col-md-6">
+        <label for="profileInput" class="form-label">ACME Profile</label>
+        <select id="profileInput" class="form-select" ${state.busy || !state.availableProfileIds.length ? "disabled" : ""}>
+          ${profileOptions}
+        </select>
+        <div class="form-text">
+          ${state.availableProfileIds.length
+            ? `Profile list comes from provider directory metadata.${selectedProfileDocUrl ? ` <a href="${escapeHtml(selectedProfileDocUrl)}" target="_blank" rel="noopener noreferrer">Profile details</a>.` : ""}`
+            : "Provider did not advertise profile selection metadata."}
+        </div>
+      </div>
+      <div class="col-md-6">
         <label for="certTypeInput" class="form-label">Certificate Type</label>
         <select id="certTypeInput" class="form-select" ${state.busy ? "disabled" : ""}>${certTypeOptions}</select>
       </div>
@@ -293,6 +328,11 @@ function renderStepCertificateConfig() {
     </form>
   `;
 
+  document.getElementById("profileInput")?.addEventListener("change", (event) => {
+    state.profile = event.target.value;
+    render();
+  });
+
   document.getElementById("certTypeInput").addEventListener("change", (event) => {
     state.certType = event.target.value;
     render();
@@ -306,6 +346,7 @@ function renderStepCertificateConfig() {
     }
 
     const identifierValue = normalizeIdentifierValue(document.getElementById("identifierInput").value);
+    const profileValue = document.getElementById("profileInput")?.value || state.profile;
     const certTypeValue = document.getElementById("certTypeInput").value;
 
     if (!identifierValue) {
@@ -322,6 +363,7 @@ function renderStepCertificateConfig() {
 
     try {
       await runStep("Creating ACME order...", async () => {
+        state.profile = profileValue;
         state.certType = certTypeValue;
         state.identifierValue = identifierValue;
         await createAcmeOrder();
@@ -655,8 +697,51 @@ function getDirectoryUrlForSelection() {
   return directoryUrl;
 }
 
+function getAllowedIdentifierTypesForProfile(providerConfig, profileId) {
+  const profileMap = providerConfig.profileIdentifierTypes || {};
+  if (profileId && Array.isArray(profileMap[profileId]) && profileMap[profileId].length) {
+    return profileMap[profileId];
+  }
+  return providerConfig.defaultIdentifierTypes || ["dns"];
+}
+
+function syncProfilesFromDirectory() {
+  const providerConfig = getProviderConfig();
+  const directoryProfiles = state.directory?.meta?.profiles || {};
+  state.directoryProfiles = directoryProfiles;
+
+  const advertisedProfileIds = Object.keys(directoryProfiles);
+  if (!advertisedProfileIds.length) {
+    state.availableProfileIds = [];
+    state.profile = "";
+    return;
+  }
+
+  const knownProfileIds = advertisedProfileIds.filter((profileId) => {
+    const profileMap = providerConfig.profileIdentifierTypes || {};
+    return Array.isArray(profileMap[profileId]);
+  });
+
+  state.availableProfileIds = knownProfileIds.length ? knownProfileIds : advertisedProfileIds;
+
+  const defaultProfile = providerConfig.defaultProfile;
+  if (defaultProfile && state.availableProfileIds.includes(defaultProfile)) {
+    state.profile = defaultProfile;
+    return;
+  }
+
+  if (state.profile && state.availableProfileIds.includes(state.profile)) {
+    return;
+  }
+
+  state.profile = state.availableProfileIds[0];
+}
+
 function clearOrderContext() {
   state.identifierValue = "";
+  state.profile = "";
+  state.directoryProfiles = {};
+  state.availableProfileIds = [];
   state.order = null;
   state.orderUrl = "";
   state.authorization = null;
@@ -682,6 +767,10 @@ async function initializeAcmeAccount() {
   const directoryUrl = getDirectoryUrlForSelection();
   pushLog(`Loading ACME directory: ${directoryUrl}`);
   state.directory = await fetchJson(directoryUrl);
+  syncProfilesFromDirectory();
+  if (state.profile) {
+    pushLog(`Selected ACME profile: ${state.profile}`);
+  }
 
   pushLog("Generating account key pair (RSA 2048)...");
   state.accountKeyPair = await generateRsaKeyPair();
@@ -714,6 +803,12 @@ async function createAcmeOrder() {
     throw new Error("Please initialize your ACME account first.");
   }
 
+  const providerConfig = getProviderConfig();
+  const allowedIdentifierTypes = getAllowedIdentifierTypesForProfile(providerConfig, state.profile);
+  if (!allowedIdentifierTypes.includes(state.certType)) {
+    throw new Error(`Profile ${state.profile || "default"} does not permit ${state.certType.toUpperCase()} identifiers.`);
+  }
+
   state.order = null;
   state.orderUrl = "";
   state.authorization = null;
@@ -728,9 +823,13 @@ async function createAcmeOrder() {
   state.domainKeyPair = null;
 
   pushLog("Creating new order...");
-  const orderResponse = await acmePost(state.directory.newOrder, {
+  const orderPayload = {
     identifiers: [{ type: state.certType, value: state.identifierValue }],
-  });
+  };
+  if (state.profile) {
+    orderPayload.profile = state.profile;
+  }
+  const orderResponse = await acmePost(state.directory.newOrder, orderPayload);
 
   const orderUrl = orderResponse.location || orderResponse.response.headers.get("Location");
   if (!orderUrl) {
