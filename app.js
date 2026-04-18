@@ -315,7 +315,7 @@ function renderStepChallenge() {
         return;
       }
 
-      downloadTextFile(state.challenge.token, state.keyAuthorization);
+        downloadTextFile(state.challenge.token, state.keyAuthorization, "application/octet-stream");
       pushLog(`Downloaded HTTP-01 challenge file: ${state.challenge.token}`);
       renderLog();
     });
@@ -942,8 +942,8 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
-function downloadTextFile(filename, content) {
-  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+function downloadTextFile(filename, content, mimeType = "text/plain;charset=utf-8") {
+  const blob = new Blob([content], { type: mimeType });
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;
