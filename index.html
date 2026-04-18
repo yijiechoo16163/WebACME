@@ -10,18 +10,13 @@
       integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
       crossorigin="anonymous"
     />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="orb orb-a" aria-hidden="true"></div>
-    <div class="orb orb-b" aria-hidden="true"></div>
-
-    <main class="container py-4 py-lg-5">
-      <div class="row justify-content-center">
-        <div class="col-12 col-xl-10">
-          <div class="card app-card border-0 shadow-lg">
-            <div class="card-header app-header text-white">
+    <main class="container-fluid app-main px-0">
+      <div class="app-card">
+            <div class="app-header">
               <div>
                 <h1 class="h4 mb-1">WebACME</h1>
                 <p class="mb-0 small opacity-75">100% client-side ACME certificate issuance with WebCrypto</p>
@@ -36,7 +31,7 @@
               </div>
             </div>
 
-            <div class="card-body p-4 p-lg-5">
+            <div class="app-body">
               <ul id="stepper" class="stepper list-unstyled mb-4"></ul>
 
               <div id="alertRegion" class="mb-3"></div>
@@ -60,8 +55,6 @@
                 <pre id="eventLog" class="event-log rounded-3 p-3 mb-0 mt-3"></pre>
               </details>
             </div>
-          </div>
-        </div>
       </div>
     </main>
 
