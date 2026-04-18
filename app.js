@@ -275,21 +275,15 @@ function renderStepAccountInit() {
       </div>
     `;
   } else if (state.providerTermsOfServiceUrl) {
-    const websiteHint = state.providerWebsiteUrl
-      ? ` You can also visit the provider website: <a href="${escapeHtml(state.providerWebsiteUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(state.providerWebsiteUrl)}</a>.`
-      : "";
-
     termsAcknowledgementHtml = `
       <div class="alert alert-secondary mb-0">
-        By creating an ACME account with ${escapeHtml(providerLabel)}, you acknowledged that you agreed to the Terms of Service of the provider:
-        <a href="${escapeHtml(state.providerTermsOfServiceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(state.providerTermsOfServiceUrl)}</a>.${websiteHint}
+        By creating an ACME account with ${escapeHtml(providerLabel)}, you acknowledged that you agreed to the <a href="${escapeHtml(state.providerTermsOfServiceUrl)}" target="_blank" rel="noopener noreferrer">Terms of Service</a>.
       </div>
     `;
   } else {
     termsAcknowledgementHtml = `
       <div class="alert alert-secondary mb-0">
-        By creating an ACME account with ${escapeHtml(providerLabel)}, you acknowledged that you agreed to the Terms of Service of the provider.
-        This ACME directory did not advertise a termsOfService URL in metadata.
+        By creating an ACME account with ${escapeHtml(providerLabel)}, you acknowledged that you agreed to the Terms of Service.
       </div>
     `;
   }
