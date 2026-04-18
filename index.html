@@ -28,7 +28,19 @@
 		<p id="statusMessage" class="status-message mb-4" aria-live="polite">Ready in production mode.</p>
 		<p id="errorMessage" class="error-message d-none mb-4" aria-live="assertive"></p>
 
-		<section class="mb-5">
+		<section id="introSection" class="mb-5">
+			<h1 class="h2 page-title mb-3">WebACME</h1>
+			<p class="subtitle mb-2">A 100% client-side ACME client in your browser.</p>
+			<p class="subtitle mb-2">Uses WebCrypto for key generation, direct ACME protocol requests over fetch, and Forge for CSR creation.</p>
+			<p class="subtitle mb-4">It is one of the fastest ways to obtain a certificate from Let&apos;s Encrypt without using a CLI.</p>
+			<button id="continueBtn" type="button" class="btn btn-primary px-4">Continue</button>
+			<p class="agreement-note mt-3 mb-0">
+				By continuing, you agree to the
+				<a href="https://letsencrypt.org/repository/" target="_blank" rel="noopener noreferrer">Let&apos;s Encrypt Terms of Service</a>.
+			</p>
+		</section>
+
+		<section id="generateSection" class="mb-5 d-none">
 			<h1 class="h2 page-title mb-3">Generate a Certificate</h1>
 			<p class="subtitle mb-4">Enter your domains, complete the challenge, then retrieve your certificate and key.</p>
 

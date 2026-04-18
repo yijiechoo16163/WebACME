@@ -26,6 +26,9 @@ const state = {
 const ui = {
 	modeSwitch: document.getElementById("modeSwitch"),
 	modeLabel: document.getElementById("modeLabel"),
+	introSection: document.getElementById("introSection"),
+	continueBtn: document.getElementById("continueBtn"),
+	generateSection: document.getElementById("generateSection"),
 	startForm: document.getElementById("startForm"),
 	challengeTypeInput: document.getElementById("challengeTypeInput"),
 	domainsInput: document.getElementById("domainsInput"),
@@ -60,12 +63,24 @@ function init() {
 
 function bindEvents() {
 	ui.modeSwitch.addEventListener("change", handleModeChange);
+	ui.continueBtn.addEventListener("click", handleContinue);
 	ui.challengeTypeInput.addEventListener("change", handleChallengeTypeChange);
 	ui.startForm.addEventListener("submit", handleGenerate);
 	ui.verifyBtn.addEventListener("click", handleVerify);
 	ui.copyButtons.forEach((button) => {
 		button.addEventListener("click", handleCopy);
 	});
+}
+
+function handleContinue() {
+	const wasHidden = ui.generateSection.classList.contains("d-none");
+	ui.generateSection.classList.remove("d-none");
+	ui.generateSection.scrollIntoView({ behavior: "smooth", block: "start" });
+	ui.domainsInput.focus();
+
+	if (wasHidden) {
+		setStatus(`Ready in ${ui.modeLabel.textContent.toLowerCase()} mode.`);
+	}
 }
 
 function handleChallengeTypeChange() {

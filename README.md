@@ -31,14 +31,15 @@ Then open `http://localhost:8000`.
 
 ## User Flow
 
-1. Enter domains and optional email.
-2. Choose `HTTP-01` or `DNS-01`.
-3. Click **Generate Certificate**.
-4. Complete challenge requirements shown in copyable code blocks.
-5. For `HTTP-01`, open the check link in a new tab to verify file reachability.
-6. For `DNS-01`, use the DNS check button to verify TXT propagation.
-7. Click **Verify My Domain**.
-8. Copy certificate and private key from the results section.
+1. Review the intro notice and click **Continue**.
+2. Enter domains and optional email.
+3. Choose `HTTP-01` or `DNS-01`.
+4. Click **Generate Certificate**.
+5. Complete challenge requirements shown in copyable code blocks.
+6. For `HTTP-01`, open the check link in a new tab to verify file reachability.
+7. For `DNS-01`, use the DNS check button to verify TXT propagation.
+8. Click **Verify My Domain**.
+9. Copy certificate and private key from the results section.
 
 ## Notes
 
