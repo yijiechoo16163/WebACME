@@ -187,6 +187,27 @@ body {
   font-size: 0.93rem;
 }
 
+.account-table {
+  --bs-table-bg: transparent;
+}
+
+.account-table th {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #3a536b;
+}
+
+.account-table td {
+  font-size: 0.9rem;
+}
+
+.account-detail-kid {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.78rem;
+  color: #425e78;
+}
+
 textarea.form-control.output-block {
   font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: 0.82rem;
@@ -200,5 +221,10 @@ textarea.form-control.output-block {
 
   .event-log {
     max-height: 180px;
+  }
+
+  .account-table th,
+  .account-table td {
+    white-space: nowrap;
   }
 }

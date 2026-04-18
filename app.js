@@ -28,6 +28,8 @@ const ACME_PROVIDERS = {
   },
 };
 
+const ACME_ACCOUNT_STORAGE_KEY = "webacme.savedAcmeAccounts.v1";
+
 function createInitialState() {
   return {
     step: 1,
@@ -35,8 +37,11 @@ function createInitialState() {
     busy: false,
     logs: ["Session initialized."],
     email: "",
+    accountNickname: "",
     provider: "letsencrypt",
     environment: "staging",
+    savedAccounts: loadSavedAccounts(),
+    selectedAccountId: "",
     accountReady: false,
     profile: "",
     directoryProfiles: {},
@@ -73,6 +78,7 @@ const refs = {
   alertRegion: document.getElementById("alertRegion"),
   content: document.getElementById("app-step-content"),
   eventLog: document.getElementById("eventLog"),
+  accountManagerBtn: document.getElementById("openAccountManagerBtn"),
   exportAccountBtn: document.getElementById("exportAccountKeyBtn"),
   exportDomainBtn: document.getElementById("exportDomainKeyBtn"),
   resetSessionBtn: document.getElementById("resetSessionBtn"),
@@ -89,10 +95,20 @@ init();
 
 function init() {
   bindGlobalActions();
+  state.savedAccounts = loadSavedAccounts();
   render();
 }
 
 function bindGlobalActions() {
+  refs.accountManagerBtn.addEventListener("click", () => {
+    if (state.busy) {
+      return;
+    }
+
+    state.step = 1;
+    render();
+  });
+
   refs.exportAccountBtn.addEventListener("click", () => {
     if (!state.accountPrivateKeyPem) {
       return;
@@ -186,17 +202,55 @@ function renderStepAccountInit() {
       return `<option value="${environmentId}" ${selected}>${label}</option>`;
     })
     .join("");
+  const savedAccountOptions = state.savedAccounts
+    .map((account) => {
+      const selected = account.id === state.selectedAccountId ? "selected" : "";
+      const providerLabel = getProviderLabel(account.providerId);
+      const optionLabel = `${account.nickname} (${providerLabel} / ${account.environmentId})`;
+      return `<option value="${account.id}" ${selected}>${escapeHtml(optionLabel)}</option>`;
+    })
+    .join("");
+  const savedAccountRows = state.savedAccounts
+    .map((account) => {
+      const providerLabel = getProviderLabel(account.providerId);
+      const rowClass = account.id === state.selectedAccountId ? "table-primary" : "";
+      const createdAtLabel = formatTimestamp(account.createdAt);
+
+      return `
+        <tr class="${rowClass}">
+          <td>
+            <div class="fw-semibold">${escapeHtml(account.nickname)}</div>
+          </td>
+          <td>
+            <div><span class="fw-semibold">Provider:</span> ${escapeHtml(providerLabel)}</div>
+            <div><span class="fw-semibold">Environment:</span> ${escapeHtml(account.environmentId)}</div>
+            <div><span class="fw-semibold">Email:</span> ${escapeHtml(account.email || "(not set)")}</div>
+            <div><span class="fw-semibold">KID:</span> <span class="account-detail-kid">${escapeHtml(truncateMiddle(account.accountKid, 54))}</span></div>
+          </td>
+          <td class="text-nowrap">${escapeHtml(createdAtLabel)}</td>
+          <td class="text-nowrap">
+            <button class="btn btn-sm btn-outline-primary me-2" data-account-action="use" data-account-id="${escapeHtml(account.id)}" type="button" ${state.busy ? "disabled" : ""}>Use</button>
+            <button class="btn btn-sm btn-outline-danger" data-account-action="delete" data-account-id="${escapeHtml(account.id)}" type="button" ${state.busy ? "disabled" : ""}>Delete</button>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
 
   refs.content.innerHTML = `
     <div class="mb-3">
       <h2 class="h5">Step 1: ACME Account Initialization</h2>
-      <p class="mini-note mb-0">Choose provider and environment, then initialize your ACME account key in browser memory.</p>
+      <p class="mini-note mb-0">Create and save ACME accounts in your browser, then select any saved account to continue from Stage 2.</p>
     </div>
 
     <form id="accountInitForm" class="row g-3">
       <div class="col-md-6">
         <label for="emailInput" class="form-label">Email (optional)</label>
         <input id="emailInput" class="form-control" type="email" placeholder="you@example.com" value="${escapeHtml(state.email)}" />
+      </div>
+      <div class="col-md-6">
+        <label for="accountNicknameInput" class="form-label">Account Nickname</label>
+        <input id="accountNicknameInput" class="form-control" type="text" maxlength="60" placeholder="e.g. Team Staging Account" value="${escapeHtml(state.accountNickname)}" />
       </div>
       <div class="col-md-6">
         <label for="providerInput" class="form-label">ACME Provider</label>
@@ -213,10 +267,55 @@ function renderStepAccountInit() {
       </div>
       <div class="col-12 d-flex gap-2 flex-wrap">
         <button class="btn btn-primary" id="initAccountBtn" type="submit" ${state.busy ? "disabled" : ""}>
-          ${state.busy ? "Working..." : "Initialize ACME Account"}
+          ${state.busy ? "Working..." : "Create ACME Account And Save"}
         </button>
       </div>
     </form>
+
+    <div class="card border-0 bg-light mt-4">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+          <div>
+            <h3 class="h6 mb-1">Account Manager / Selector</h3>
+            <p class="mini-note mb-0">You can keep multiple ACME accounts across providers and environments, each with a memorable nickname.</p>
+          </div>
+          <span class="badge text-bg-secondary">${state.savedAccounts.length} saved</span>
+        </div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-md-8">
+            <label for="savedAccountInput" class="form-label">Select Saved ACME Account</label>
+            <select id="savedAccountInput" class="form-select" ${state.busy || !state.savedAccounts.length ? "disabled" : ""}>
+              <option value="">Choose an account...</option>
+              ${savedAccountOptions}
+            </select>
+          </div>
+          <div class="col-md-4 d-flex align-items-end">
+            <button id="useSelectedAccountBtn" class="btn btn-outline-primary w-100" type="button" ${state.busy || !state.savedAccounts.length ? "disabled" : ""}>
+              Use Selected Account
+            </button>
+          </div>
+        </div>
+
+        ${state.savedAccounts.length
+          ? `
+            <div class="table-responsive">
+              <table class="table table-sm table-hover align-middle account-table mb-0">
+                <thead>
+                  <tr>
+                    <th scope="col">ACME Account Nickname</th>
+                    <th scope="col">ACME Account Details</th>
+                    <th scope="col">Time Created</th>
+                    <th scope="col">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>${savedAccountRows}</tbody>
+              </table>
+            </div>
+          `
+          : `<div class="alert alert-secondary mb-0">No saved ACME accounts yet. Create one above to get started.</div>`}
+      </div>
+    </div>
   `;
 
   document.getElementById("providerInput").addEventListener("change", (event) => {
@@ -230,6 +329,70 @@ function renderStepAccountInit() {
     render();
   });
 
+  document.getElementById("savedAccountInput")?.addEventListener("change", (event) => {
+    state.selectedAccountId = event.target.value;
+  });
+
+  document.getElementById("useSelectedAccountBtn")?.addEventListener("click", async () => {
+    if (state.busy) {
+      return;
+    }
+
+    const selectedAccountId = document.getElementById("savedAccountInput")?.value || state.selectedAccountId;
+    if (!selectedAccountId) {
+      setAlert("warning", "Select an ACME account from the list first.");
+      render();
+      return;
+    }
+
+    try {
+      await runStep("Loading saved ACME account...", async () => {
+        await loadSavedAcmeAccount(selectedAccountId);
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+  document.querySelectorAll("[data-account-action]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      const target = event.currentTarget;
+      const action = target.getAttribute("data-account-action");
+      const accountId = target.getAttribute("data-account-id");
+
+      if (!action || !accountId || state.busy) {
+        return;
+      }
+
+      if (action === "delete") {
+        const account = getSavedAccountById(accountId);
+        if (!account) {
+          return;
+        }
+
+        const confirmed = window.confirm(`Delete saved ACME account "${account.nickname}"?`);
+        if (!confirmed) {
+          return;
+        }
+
+        deleteSavedAccount(accountId);
+        pushLog(`Deleted saved account: ${account.nickname}`);
+        render();
+        return;
+      }
+
+      if (action === "use") {
+        try {
+          await runStep("Loading saved ACME account...", async () => {
+            await loadSavedAcmeAccount(accountId);
+          });
+        } catch (error) {
+          handleError(error);
+        }
+      }
+    });
+  });
+
   document.getElementById("accountInitForm").addEventListener("submit", async (event) => {
     event.preventDefault();
 
@@ -238,15 +401,21 @@ function renderStepAccountInit() {
     }
 
     const emailValue = document.getElementById("emailInput").value.trim();
+    const accountNicknameValue = document.getElementById("accountNicknameInput").value.trim();
     const providerValue = document.getElementById("providerInput").value;
     const envValue = document.getElementById("environmentInput").value;
 
     try {
       await runStep("Initializing ACME account...", async () => {
         state.email = emailValue;
+        state.accountNickname = accountNicknameValue;
         state.provider = providerValue;
         state.environment = envValue;
         await initializeAcmeAccount();
+        const savedAccount = saveCurrentAccountToBrowser(state.accountNickname);
+        state.selectedAccountId = savedAccount.id;
+        state.accountNickname = savedAccount.nickname;
+        pushLog(`Saved ACME account as "${savedAccount.nickname}".`);
       });
     } catch (error) {
       handleError(error);
@@ -675,8 +844,7 @@ function handleError(error) {
 function resetSession() {
   const fresh = createInitialState();
   Object.assign(state, fresh);
-  localStorage.clear();
-  pushLog("Session reset complete. Local storage cleared.");
+  pushLog("Session reset complete. Saved ACME accounts are still available in Account Manager.");
   render();
 }
 
@@ -754,6 +922,210 @@ function clearOrderContext() {
   state.domainKeyPair = null;
   state.domainPrivateKeyPem = "";
   state.certificatePem = "";
+}
+
+function loadSavedAccounts() {
+  try {
+    const serialized = localStorage.getItem(ACME_ACCOUNT_STORAGE_KEY);
+    if (!serialized) {
+      return [];
+    }
+
+    const parsed = JSON.parse(serialized);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .map((item) => normalizeSavedAccount(item))
+      .filter(Boolean)
+      .sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime());
+  } catch {
+    return [];
+  }
+}
+
+function normalizeSavedAccount(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const requiredFields = [
+    "id",
+    "nickname",
+    "providerId",
+    "environmentId",
+    "accountKid",
+    "accountPrivateKeyPem",
+    "accountThumbprint",
+    "createdAt",
+  ];
+
+  for (const field of requiredFields) {
+    if (typeof value[field] !== "string" || !value[field].trim()) {
+      return null;
+    }
+  }
+
+  if (!value.accountJwk || typeof value.accountJwk !== "object") {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    nickname: value.nickname,
+    providerId: value.providerId,
+    environmentId: value.environmentId,
+    email: typeof value.email === "string" ? value.email : "",
+    accountKid: value.accountKid,
+    accountPrivateKeyPem: value.accountPrivateKeyPem,
+    accountJwk: value.accountJwk,
+    accountThumbprint: value.accountThumbprint,
+    createdAt: value.createdAt,
+  };
+}
+
+function persistSavedAccounts(accounts) {
+  try {
+    localStorage.setItem(ACME_ACCOUNT_STORAGE_KEY, JSON.stringify(accounts));
+  } catch {
+    throw new Error("Unable to persist ACME account list in browser storage.");
+  }
+}
+
+function getSavedAccountById(accountId) {
+  return state.savedAccounts.find((account) => account.id === accountId) || null;
+}
+
+function getProviderLabel(providerId) {
+  return ACME_PROVIDERS[providerId]?.label || providerId;
+}
+
+function formatTimestamp(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+}
+
+function truncateMiddle(value, maxLength = 48) {
+  if (!value || value.length <= maxLength) {
+    return value;
+  }
+
+  const leftLength = Math.floor((maxLength - 1) / 2);
+  const rightLength = Math.floor((maxLength - 1) / 2);
+  return `${value.slice(0, leftLength)}...${value.slice(value.length - rightLength)}`;
+}
+
+function buildDefaultAccountNickname(email, providerId, environmentId) {
+  if (email) {
+    return `${getProviderLabel(providerId)} ${email}`;
+  }
+  return `${getProviderLabel(providerId)} ${environmentId} account`;
+}
+
+function saveCurrentAccountToBrowser(nicknameInput) {
+  if (!state.accountKid || !state.accountPrivateKeyPem || !state.accountJwk || !state.accountThumbprint) {
+    throw new Error("Current account is incomplete and cannot be saved.");
+  }
+
+  const nowIso = new Date().toISOString();
+  const nickname = nicknameInput || buildDefaultAccountNickname(state.email, state.provider, state.environment);
+
+  const newAccount = {
+    id: typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `acct_${Date.now()}`,
+    nickname,
+    providerId: state.provider,
+    environmentId: state.environment,
+    email: state.email,
+    accountKid: state.accountKid,
+    accountPrivateKeyPem: state.accountPrivateKeyPem,
+    accountJwk: state.accountJwk,
+    accountThumbprint: state.accountThumbprint,
+    createdAt: nowIso,
+  };
+
+  const existingIndex = state.savedAccounts.findIndex(
+    (account) => account.providerId === newAccount.providerId
+      && account.environmentId === newAccount.environmentId
+      && account.accountKid === newAccount.accountKid
+  );
+
+  let nextAccounts;
+  let savedAccount;
+
+  if (existingIndex >= 0) {
+    savedAccount = {
+      ...state.savedAccounts[existingIndex],
+      ...newAccount,
+      id: state.savedAccounts[existingIndex].id,
+      createdAt: state.savedAccounts[existingIndex].createdAt,
+    };
+    nextAccounts = [...state.savedAccounts];
+    nextAccounts[existingIndex] = savedAccount;
+  } else {
+    savedAccount = newAccount;
+    nextAccounts = [...state.savedAccounts, newAccount];
+  }
+
+  nextAccounts.sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime());
+  persistSavedAccounts(nextAccounts);
+  state.savedAccounts = nextAccounts;
+
+  return savedAccount;
+}
+
+function deleteSavedAccount(accountId) {
+  const nextAccounts = state.savedAccounts.filter((account) => account.id !== accountId);
+  persistSavedAccounts(nextAccounts);
+  state.savedAccounts = nextAccounts;
+  if (state.selectedAccountId === accountId) {
+    state.selectedAccountId = "";
+  }
+}
+
+async function loadSavedAcmeAccount(accountId) {
+  const account = getSavedAccountById(accountId);
+  if (!account) {
+    throw new Error("Selected saved account no longer exists.");
+  }
+
+  if (!ACME_PROVIDERS[account.providerId]) {
+    throw new Error(`Provider ${account.providerId} is no longer configured.`);
+  }
+
+  state.provider = account.providerId;
+  state.environment = account.environmentId;
+  state.email = account.email || "";
+  state.accountNickname = account.nickname;
+  state.selectedAccountId = account.id;
+
+  clearOrderContext();
+  state.accountReady = false;
+
+  const directoryUrl = getDirectoryUrlForSelection();
+  pushLog(`Loading ACME directory: ${directoryUrl}`);
+  state.directory = await fetchJson(directoryUrl);
+  syncProfilesFromDirectory();
+
+  state.accountPrivateKeyPem = account.accountPrivateKeyPem;
+  state.accountKeyPair = {
+    privateKey: await importPrivateKeyFromPem(account.accountPrivateKeyPem),
+    publicKey: null,
+  };
+  state.accountJwk = account.accountJwk;
+  state.accountThumbprint = account.accountThumbprint || await createJwkThumbprint(state.accountJwk);
+  state.accountKid = account.accountKid;
+
+  await refreshNonce();
+
+  state.accountReady = true;
+  state.sessionDirty = true;
+  state.step = 2;
+
+  pushLog(`Loaded saved ACME account "${account.nickname}".`);
 }
 
 async function initializeAcmeAccount() {
@@ -1139,6 +1511,30 @@ async function generateRsaKeyPair() {
 async function exportPrivateKeyToPem(privateKey) {
   const buffer = await crypto.subtle.exportKey("pkcs8", privateKey);
   return toPem("PRIVATE KEY", new Uint8Array(buffer));
+}
+
+async function importPrivateKeyFromPem(privateKeyPem) {
+  const base64 = privateKeyPem
+    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\s+/g, "");
+
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return crypto.subtle.importKey(
+    "pkcs8",
+    bytes.buffer,
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      hash: "SHA-256",
+    },
+    true,
+    ["sign"]
+  );
 }
 
 async function exportPublicKeyToPem(publicKey) {

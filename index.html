@@ -27,6 +27,9 @@
                 <p class="mb-0 small opacity-75">100% client-side ACME certificate issuance with WebCrypto</p>
               </div>
               <div class="d-flex flex-wrap gap-2 mt-3 mt-md-0">
+                <button id="openAccountManagerBtn" class="btn btn-sm btn-outline-light" type="button">
+                  Account Manager
+                </button>
                 <button id="exportAccountKeyBtn" class="btn btn-sm btn-outline-light" type="button" disabled>
                   Export Account Key
                 </button>
@@ -50,8 +53,9 @@
                 <summary class="fw-semibold">Security Model</summary>
                 <ul class="mt-3 mb-0">
                   <li>Private keys are generated in browser memory with WebCrypto.</li>
+                  <li>If you save an ACME account, its account key and metadata are stored in this browser&apos;s local storage.</li>
                   <li>No backend relay is used. ACME requests are sent directly to Let&apos;s Encrypt.</li>
-                  <li>Refreshing or leaving this page can destroy active session state and keys.</li>
+                  <li>Refreshing or leaving this page can destroy active issuance session state, but saved accounts remain available.</li>
                 </ul>
               </details>
 
