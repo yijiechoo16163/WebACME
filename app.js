@@ -296,7 +296,7 @@ function renderStepCertificateConfig() {
     ? "Use a public IP address that you control."
     : "Use a domain such as example.com or www.example.com.";
   const dualIpDnsNote = includeDualIpDns
-    ? "For Let's Encrypt IP requests, this flow will also include a DNS identifier and DNS SAN using the same value for compatibility testing."
+    ? "For Let's Encrypt IP requests, the order stays IP-only. After authorization succeeds, finalize will attempt a CSR with both IP and DNS SAN entries using the same value for compatibility testing."
     : "";
 
   refs.content.innerHTML = `
@@ -725,17 +725,6 @@ function shouldIncludeDualIpDnsForLetsEncryptIp(
     && (environment === "staging" || environment === "production");
 }
 
-function buildOrderIdentifiers(identifierValue, certType, options = {}) {
-  const { includeDualIpDns = false } = options;
-  const identifiers = [{ type: certType, value: identifierValue }];
-
-  if (includeDualIpDns && certType === "ip") {
-    identifiers.push({ type: "dns", value: identifierValue });
-  }
-
-  return identifiers;
-}
-
 function syncProfilesFromDirectory() {
   const providerConfig = getProviderConfig();
   const directoryProfiles = state.directory?.meta?.profiles || {};
@@ -841,10 +830,6 @@ async function createAcmeOrder() {
   if (!allowedIdentifierTypes.includes(state.certType)) {
     throw new Error(`Profile ${state.profile || "default"} does not permit ${state.certType.toUpperCase()} identifiers.`);
   }
-  const includeDualIpDns = shouldIncludeDualIpDnsForLetsEncryptIp();
-  if (includeDualIpDns && !allowedIdentifierTypes.includes("dns")) {
-    throw new Error(`Profile ${state.profile || "default"} does not permit DNS identifiers required for the dual IP+DNS test.`);
-  }
 
   state.order = null;
   state.orderUrl = "";
@@ -863,7 +848,7 @@ async function createAcmeOrder() {
 
   pushLog("Creating new order...");
   const orderPayload = {
-    identifiers: buildOrderIdentifiers(state.identifierValue, state.certType, { includeDualIpDns }),
+    identifiers: [{ type: state.certType, value: state.identifierValue }],
   };
   if (state.profile) {
     orderPayload.profile = state.profile;
