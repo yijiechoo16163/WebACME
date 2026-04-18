@@ -257,7 +257,10 @@ function renderStepChallenge() {
               <p class="mb-2"><strong>Filename:</strong></p>
               <div class="challenge-box mb-3">.well-known/acme-challenge/${escapeHtml(challenge.token)}</div>
               <p class="mb-2"><strong>Content:</strong></p>
-              <div class="challenge-box">${escapeHtml(state.keyAuthorization)}</div>
+              <div class="challenge-box mb-3">${escapeHtml(state.keyAuthorization)}</div>
+              <button id="downloadHttpChallengeBtn" class="btn btn-outline-secondary btn-sm" type="button" ${state.busy ? "disabled" : ""}>
+                Download HTTP-01 Challenge File
+              </button>
             ` : ""}
             ${isDns ? `
               <p class="mb-2"><strong>TXT Record Name:</strong></p>
@@ -302,6 +305,19 @@ function renderStepChallenge() {
       } catch (error) {
         handleError(error);
       }
+    });
+  }
+
+  if (isHttp) {
+    document.getElementById("downloadHttpChallengeBtn").addEventListener("click", () => {
+      if (!state.challenge?.token || !state.keyAuthorization) {
+        handleError(new Error("HTTP challenge data is incomplete."));
+        return;
+      }
+
+      downloadTextFile(state.challenge.token, state.keyAuthorization);
+      pushLog(`Downloaded HTTP-01 challenge file: ${state.challenge.token}`);
+      renderLog();
     });
   }
 
