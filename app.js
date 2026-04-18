@@ -65,6 +65,8 @@ function createInitialState() {
     availableProfileIds: [],
     certType: "dns",
     identifierValue: "",
+    sanInputValues: [""],
+    sanIdentifiers: [],
     directory: null,
     nonce: null,
     accountKeyPair: null,
@@ -74,6 +76,8 @@ function createInitialState() {
     accountKid: "",
     order: null,
     orderUrl: "",
+    authorizationStates: [],
+    selectedAuthorizationUrl: "",
     authorization: null,
     authorizationUrl: "",
     availableChallenges: {},
@@ -276,7 +280,19 @@ function renderCertificateManagerList() {
   const requestRows = selectedAccountRequests
     .map((request) => {
       const providerLabel = getProviderLabel(request.providerId);
-      const typeLabel = request.certType === "ip" ? "IP" : "DNS";
+      let typeLabel = "DNS";
+      if (request.certType === "ip") {
+        typeLabel = "IP";
+      } else if (request.certType === "mixed") {
+        typeLabel = "DNS + IP";
+      }
+
+      const identifiers = Array.isArray(request.sanValues) && request.sanValues.length
+        ? request.sanValues
+        : [request.identifierValue].filter(Boolean);
+      const identifierSummary = identifiers.length > 1
+        ? `${identifiers[0]} (+${identifiers.length - 1})`
+        : (identifiers[0] || "");
       const profileLabel = request.profile || "(default)";
       const createdLabel = formatTimestamp(request.createdAt);
       const updatedLabel = formatTimestamp(request.updatedAt || request.createdAt);
@@ -286,7 +302,7 @@ function renderCertificateManagerList() {
           <td>${escapeHtml(truncateMiddle(request.id, 12))}</td>
           <td>${escapeHtml(request.status || "unknown")}</td>
           <td>${escapeHtml(typeLabel)}</td>
-          <td>${escapeHtml(request.identifierValue || "")}</td>
+          <td>${escapeHtml(identifierSummary)}</td>
           <td>${escapeHtml(providerLabel)}</td>
           <td>${escapeHtml(request.environmentId || "")}</td>
           <td>${escapeHtml(profileLabel)}</td>
@@ -664,41 +680,42 @@ function renderStepCertificateConfig() {
   }
 
   const provider = getProviderConfig(state.provider);
+  state.sanInputValues = normalizeSanInputValues(state.sanInputValues);
+
   const profileOptions = state.availableProfileIds
     .map((profileId) => {
       const selected = profileId === state.profile ? "selected" : "";
       return `<option value="${profileId}" ${selected}>${escapeHtml(profileId)}</option>`;
     })
     .join("");
-  const allowedIdentifierTypes = getAllowedIdentifierTypesForProfile(provider, state.profile);
-  const availableCertTypes = (provider.certTypes || [{ id: "dns", label: "Domain Certificate", placeholder: "example.com" }])
-    .filter((item) => allowedIdentifierTypes.includes(item.id));
-
-  if (!availableCertTypes.length) {
-    throw new Error(`No supported certificate types for profile ${state.profile || "default"}.`);
-  }
-
-  if (!availableCertTypes.some((item) => item.id === state.certType)) {
-    state.certType = availableCertTypes[0].id;
-  }
-
-  const selectedCertType = availableCertTypes.find((item) => item.id === state.certType) || availableCertTypes[0];
   const selectedProfileDocUrl = state.profile ? state.directoryProfiles[state.profile] : "";
-  const certTypeOptions = availableCertTypes
-    .map((item) => {
-      const selected = item.id === state.certType ? "selected" : "";
-      return `<option value="${item.id}" ${selected}>${escapeHtml(item.label)}</option>`;
+  const supportedTypeLabel = getAllowedIdentifierTypesForProfile(provider, state.profile)
+    .map((item) => item.toUpperCase())
+    .join(", ");
+
+  const sanRows = state.sanInputValues
+    .map((value, index) => {
+      const placeholder = index === 0 ? "example.com" : "203.0.113.10 or *.example.com";
+      return `
+        <div class="input-group mb-2">
+          <span class="input-group-text">SAN ${index + 1}</span>
+          <input
+            class="form-control san-input"
+            type="text"
+            data-san-index="${index}"
+            placeholder="${escapeHtml(placeholder)}"
+            value="${escapeHtml(value)}"
+            ${state.busy ? "disabled" : ""}
+          />
+        </div>
+      `;
     })
     .join("");
-  const identifierLabel = state.certType === "ip" ? "IP Address" : "Domain Name";
-  const identifierHelp = state.certType === "ip"
-    ? "Use a public IP address that you control."
-    : "Use a domain such as example.com or www.example.com.";
 
   refs.content.innerHTML = `
     <div class="mb-3">
       <h2 class="h5">Step 2: Configure Certificate Request</h2>
-      <p class="mini-note mb-0">Account is ready for ${escapeHtml(provider.label)}. Configure certificate target and create your order.</p>
+      <p class="mini-note mb-0">Account is ready for ${escapeHtml(provider.label)}. Add one or more Subject Alternative Names (SANs), then create your order.</p>
     </div>
 
     <form id="certificateConfigForm" class="row g-3">
@@ -713,14 +730,13 @@ function renderStepCertificateConfig() {
             : "Provider did not advertise profile selection metadata."}
         </div>
       </div>
-      <div class="col-md-6">
-        <label for="certTypeInput" class="form-label">Certificate Type</label>
-        <select id="certTypeInput" class="form-select" ${state.busy ? "disabled" : ""}>${certTypeOptions}</select>
-      </div>
-      <div class="col-md-6">
-        <label for="identifierInput" class="form-label">${identifierLabel}</label>
-        <input id="identifierInput" class="form-control" type="text" placeholder="${escapeHtml(selectedCertType.placeholder || "example.com")}" value="${escapeHtml(state.identifierValue)}" required />
-        <div class="form-text">${identifierHelp}</div>
+      <div class="col-12">
+        <label class="form-label">Subject Alternative Names (SAN)</label>
+        ${sanRows}
+        <div class="form-text">
+          One SAN per row. Enter DNS names and/or IP addresses. A blank row is added automatically while typing.
+          Profile supports: ${escapeHtml(supportedTypeLabel || "DNS")}
+        </div>
       </div>
       <div class="col-12 d-flex gap-2 flex-wrap">
         <button class="btn btn-primary" id="createOrderBtn" type="submit" ${state.busy ? "disabled" : ""}>
@@ -735,9 +751,16 @@ function renderStepCertificateConfig() {
     render();
   });
 
-  document.getElementById("certTypeInput").addEventListener("change", (event) => {
-    state.certType = event.target.value;
-    render();
+  document.querySelectorAll(".san-input").forEach((input) => {
+    input.addEventListener("input", () => {
+      const currentInputs = Array.from(document.querySelectorAll(".san-input"));
+      state.sanInputValues = currentInputs.map((item) => item.value);
+      const previousLength = state.sanInputValues.length;
+      state.sanInputValues = normalizeSanInputValues(state.sanInputValues);
+      if (state.sanInputValues.length !== previousLength) {
+        render();
+      }
+    });
   });
 
   document.getElementById("certificateConfigForm").addEventListener("submit", async (event) => {
@@ -747,18 +770,33 @@ function renderStepCertificateConfig() {
       return;
     }
 
-    const identifierValue = normalizeIdentifierValue(document.getElementById("identifierInput").value);
     const profileValue = document.getElementById("profileInput")?.value || state.profile;
-    const certTypeValue = document.getElementById("certTypeInput").value;
+    const sanValues = Array.from(document.querySelectorAll(".san-input")).map((input) => input.value);
+    const sanParseResult = parseSanIdentifiers(sanValues);
 
-    if (!identifierValue) {
-      setAlert("danger", "Please enter a domain name or IP address.");
+    if (sanParseResult.errors.length) {
+      setAlert("danger", sanParseResult.errors[0]);
       render();
       return;
     }
 
-    if (certTypeValue === "ip" && !isLikelyIpAddress(identifierValue)) {
-      setAlert("danger", "Certificate type is set to IP, but the value does not look like a valid IP address.");
+    if (!sanParseResult.identifiers.length) {
+      setAlert("danger", "Please enter at least one SAN value.");
+      render();
+      return;
+    }
+
+    const includesIp = sanParseResult.identifiers.some((item) => item.type === "ip");
+    if (includesIp && profileValue !== "shortlived") {
+      setAlert("danger", "This request includes IP SAN entries. Select the shortlived profile before continuing.");
+      render();
+      return;
+    }
+
+    const allowedIdentifierTypes = getAllowedIdentifierTypesForProfile(provider, profileValue);
+    const unsupportedIdentifier = sanParseResult.identifiers.find((item) => !allowedIdentifierTypes.includes(item.type));
+    if (unsupportedIdentifier) {
+      setAlert("danger", `Profile ${profileValue || "default"} does not permit ${unsupportedIdentifier.type.toUpperCase()} identifiers.`);
       render();
       return;
     }
@@ -766,8 +804,10 @@ function renderStepCertificateConfig() {
     try {
       await runStep("Creating ACME order...", async () => {
         state.profile = profileValue;
-        state.certType = certTypeValue;
-        state.identifierValue = identifierValue;
+        state.sanIdentifiers = sanParseResult.identifiers;
+        state.sanInputValues = [...sanParseResult.identifiers.map((item) => item.value), ""];
+        state.identifierValue = sanParseResult.identifiers[0].value;
+        state.certType = deriveRequestCertType(sanParseResult.identifiers);
         await createAcmeOrder();
       });
     } catch (error) {
@@ -777,18 +817,79 @@ function renderStepCertificateConfig() {
 }
 
 function renderStepChallenge() {
-  const challenge = state.challenge;
-  const availableTypes = Object.keys(state.availableChallenges);
+  const selectedAuthorization = getSelectedAuthorizationState();
+  if (!selectedAuthorization) {
+    refs.content.innerHTML = `
+      <div class="alert alert-warning mb-0">No authorization data is available yet. Return to Step 2 and create a new order.</div>
+    `;
+    return;
+  }
+
+  const challenge = selectedAuthorization.challenge;
+  const availableTypes = Object.keys(selectedAuthorization.availableChallenges || {});
   const hasMethodChoices = availableTypes.length > 1;
   const isHttp = challenge?.type === "http-01";
   const isDns = challenge?.type === "dns-01";
   const hasHttp = availableTypes.includes("http-01");
   const hasDns = availableTypes.includes("dns-01");
+  const allValid = areAllAuthorizationsValid();
+
+  const authorizationRows = state.authorizationStates
+    .map((authorizationState) => {
+      const isSelected = authorizationState.url === state.selectedAuthorizationUrl;
+      const challengeTypeLabel = authorizationState.selectedChallengeType || "(none)";
+      const identifierLabel = `${authorizationState.identifierType.toUpperCase()}: ${authorizationState.identifierValue}`;
+
+      return `
+        <tr class="${isSelected ? "table-primary" : ""}">
+          <td>${escapeHtml(identifierLabel)}</td>
+          <td>${escapeHtml(authorizationState.status || "pending")}</td>
+          <td>${escapeHtml(challengeTypeLabel)}</td>
+          <td class="text-nowrap">
+            <button
+              class="btn btn-sm btn-outline-primary me-2"
+              type="button"
+              data-auth-action="focus"
+              data-auth-url="${escapeHtml(authorizationState.url)}"
+              ${state.busy ? "disabled" : ""}
+            >
+              ${isSelected ? "Selected" : "Use"}
+            </button>
+            <button
+              class="btn btn-sm btn-outline-secondary"
+              type="button"
+              data-auth-action="check"
+              data-auth-url="${escapeHtml(authorizationState.url)}"
+              ${state.busy ? "disabled" : ""}
+            >Check</button>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  const dnsRecordName = selectedAuthorization.identifierType === "dns"
+    ? `_acme-challenge.${selectedAuthorization.identifierValue}`
+    : "_acme-challenge";
 
   refs.content.innerHTML = `
     <div class="mb-3">
-      <h2 class="h5">Step 3: Complete ${escapeHtml(challenge?.type || "")}</h2>
-      <p class="mini-note mb-0">Publish the token response, then notify Let&apos;s Encrypt and wait for authorization.</p>
+      <h2 class="h5">Step 3: Complete SAN Authorizations</h2>
+      <p class="mini-note mb-0">Each SAN must reach valid status before finalizing the order.</p>
+    </div>
+
+    <div class="table-responsive mb-3">
+      <table class="table table-sm align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Identifier</th>
+            <th>Status</th>
+            <th>Method</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>${authorizationRows}</tbody>
+      </table>
     </div>
 
     <div class="row g-3">
@@ -798,7 +899,7 @@ function renderStepChallenge() {
           <button
             id="challengeTypeHttpBtn"
             type="button"
-            class="btn ${state.selectedChallengeType === "http-01" ? "btn-primary" : "btn-outline-primary"}"
+            class="btn ${selectedAuthorization.selectedChallengeType === "http-01" ? "btn-primary" : "btn-outline-primary"}"
             ${!hasHttp || state.busy ? "disabled" : ""}
           >
             HTTP-01
@@ -806,7 +907,7 @@ function renderStepChallenge() {
           <button
             id="challengeTypeDnsBtn"
             type="button"
-            class="btn ${state.selectedChallengeType === "dns-01" ? "btn-primary" : "btn-outline-primary"}"
+            class="btn ${selectedAuthorization.selectedChallengeType === "dns-01" ? "btn-primary" : "btn-outline-primary"}"
             ${!hasDns || state.busy ? "disabled" : ""}
           >
             DNS-01
@@ -828,7 +929,7 @@ function renderStepChallenge() {
               </div>
               <p class="mb-2"><strong>Content:</strong></p>
               <div class="challenge-box challenge-copyable mb-3">
-                <span class="challenge-copyable-value">${escapeHtml(state.keyAuthorization)}</span>
+                <span class="challenge-copyable-value">${escapeHtml(selectedAuthorization.keyAuthorization)}</span>
                 <button id="copyHttpContentBtn" class="copy-icon-btn" type="button" title="Copy content" aria-label="Copy content" ${state.busy ? "disabled" : ""}>${copyIconSvg()}</button>
               </div>
               <div>
@@ -840,27 +941,73 @@ function renderStepChallenge() {
             ${isDns ? `
               <p class="mb-2"><strong>TXT Record Name:</strong></p>
               <div class="challenge-box challenge-copyable mb-3">
-                <span class="challenge-copyable-value">_acme-challenge.${escapeHtml(state.identifierValue)}</span>
+                <span class="challenge-copyable-value">${escapeHtml(dnsRecordName)}</span>
                 <button id="copyDnsNameBtn" class="copy-icon-btn" type="button" title="Copy TXT record name" aria-label="Copy TXT record name" ${state.busy ? "disabled" : ""}>${copyIconSvg()}</button>
               </div>
               <p class="mb-2"><strong>TXT Record Value:</strong></p>
               <div class="challenge-box challenge-copyable mb-3">
-                <span class="challenge-copyable-value">${escapeHtml(state.dnsTxtValue)}</span>
+                <span class="challenge-copyable-value">${escapeHtml(selectedAuthorization.dnsTxtValue)}</span>
                 <button id="copyDnsValueBtn" class="copy-icon-btn" type="button" title="Copy TXT record value" aria-label="Copy TXT record value" ${state.busy ? "disabled" : ""}>${copyIconSvg()}</button>
               </div>
               <p class="mini-note mb-0">For dns-01, this value is SHA-256(keyAuthorization) in base64url format.</p>
             ` : ""}
+            ${!isHttp && !isDns ? `<div class="alert alert-secondary mb-0">No supported challenge method is currently selectable for this SAN identifier.</div>` : ""}
           </div>
         </div>
       </div>
       <div class="col-12 d-flex gap-2 flex-wrap">
-        <button id="triggerChallengeBtn" class="btn btn-primary" type="button" ${state.busy ? "disabled" : ""}>
-          ${state.busy ? "Working..." : "I Have Deployed It, Notify CA"}
+        <button id="triggerChallengeBtn" class="btn btn-primary" type="button" ${state.busy || !selectedAuthorization.challenge?.url ? "disabled" : ""}>
+          ${state.busy ? "Working..." : "Notify CA For Selected SAN"}
         </button>
-        <button id="checkAuthStatusBtn" class="btn btn-outline-primary" type="button" ${state.busy ? "disabled" : ""}>Check Authorization Status</button>
+        <button id="checkAuthStatusBtn" class="btn btn-outline-primary" type="button" ${state.busy ? "disabled" : ""}>Check Selected Status</button>
+        <button id="checkAllAuthStatusBtn" class="btn btn-outline-primary" type="button" ${state.busy ? "disabled" : ""}>Check All SAN Statuses</button>
+        <button id="continueToFinalizeBtn" class="btn btn-success" type="button" ${!allValid || state.busy ? "disabled" : ""}>Continue To Finalize</button>
       </div>
     </div>
   `;
+
+  document.querySelectorAll("[data-auth-action]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      if (state.busy) {
+        return;
+      }
+
+      const target = event.currentTarget;
+      const action = target.getAttribute("data-auth-action");
+      const authorizationUrl = target.getAttribute("data-auth-url");
+      const authorizationState = state.authorizationStates.find((item) => item.url === authorizationUrl);
+
+      if (!action || !authorizationUrl || !authorizationState) {
+        return;
+      }
+
+      if (action === "focus") {
+        state.selectedAuthorizationUrl = authorizationUrl;
+        render();
+        return;
+      }
+
+      if (action === "check") {
+        try {
+          await runStep(`Checking authorization status for ${authorizationState.identifierValue}...`, async () => {
+            await refreshAuthorizationState(authorizationState);
+            if (areAllAuthorizationsValid()) {
+              state.step = 4;
+              updateActiveCertificateRequest({
+                status: "authorized",
+                errorMessage: "",
+              });
+              pushLog("All SAN authorizations are valid. Proceed to CSR/finalize.");
+            } else {
+              pushLog(`Authorization for ${authorizationState.identifierValue} is ${authorizationState.status}.`);
+            }
+          });
+        } catch (error) {
+          handleError(error);
+        }
+      }
+    });
+  });
 
   const challengeTypeButtons = [
     { id: "challengeTypeHttpBtn", type: "http-01" },
@@ -874,14 +1021,14 @@ function renderStepChallenge() {
     }
 
     button.addEventListener("click", async () => {
-      if (state.busy || item.type === state.selectedChallengeType) {
+      if (state.busy || item.type === selectedAuthorization.selectedChallengeType) {
         return;
       }
 
       try {
         await runStep(`Switching validation method to ${item.type}...`, async () => {
-          await applyChallengeSelection(item.type);
-          pushLog(`Validation method switched to ${item.type}.`);
+          await applyAuthorizationChallengeSelection(selectedAuthorization, item.type);
+          pushLog(`Validation method for ${selectedAuthorization.identifierValue} switched to ${item.type}.`);
         });
       } catch (error) {
         handleError(error);
@@ -890,24 +1037,24 @@ function renderStepChallenge() {
   }
 
   if (isHttp) {
-    bindCopyButton("copyHttpPathBtn", `.well-known/acme-challenge/${state.challenge.token}`, "HTTP challenge filename path");
-    bindCopyButton("copyHttpContentBtn", state.keyAuthorization, "HTTP challenge content");
+    bindCopyButton("copyHttpPathBtn", `.well-known/acme-challenge/${selectedAuthorization.challenge.token}`, "HTTP challenge filename path");
+    bindCopyButton("copyHttpContentBtn", selectedAuthorization.keyAuthorization, "HTTP challenge content");
 
     document.getElementById("downloadHttpChallengeBtn").addEventListener("click", () => {
-      if (!state.challenge?.token || !state.keyAuthorization) {
+      if (!selectedAuthorization.challenge?.token || !selectedAuthorization.keyAuthorization) {
         handleError(new Error("HTTP challenge data is incomplete."));
         return;
       }
 
-      downloadTextFile(state.challenge.token, state.keyAuthorization, "application/octet-stream");
-      pushLog(`Downloaded HTTP-01 challenge file: ${state.challenge.token}`);
+      downloadTextFile(selectedAuthorization.challenge.token, selectedAuthorization.keyAuthorization, "application/octet-stream");
+      pushLog(`Downloaded HTTP-01 challenge file: ${selectedAuthorization.challenge.token}`);
       renderLog();
     });
   }
 
   if (isDns) {
-    bindCopyButton("copyDnsNameBtn", `_acme-challenge.${state.identifierValue}`, "DNS TXT record name");
-    bindCopyButton("copyDnsValueBtn", state.dnsTxtValue, "DNS TXT record value");
+    bindCopyButton("copyDnsNameBtn", dnsRecordName, "DNS TXT record name");
+    bindCopyButton("copyDnsValueBtn", selectedAuthorization.dnsTxtValue, "DNS TXT record value");
   }
 
   document.getElementById("triggerChallengeBtn").addEventListener("click", async () => {
@@ -930,16 +1077,53 @@ function renderStepChallenge() {
     try {
       await runStep("Checking authorization status...", async () => {
         const auth = await fetchAuthorization();
-        if (auth.status === "valid") {
+        if (auth.status === "valid" && areAllAuthorizationsValid()) {
           state.step = 4;
-          pushLog("Authorization is valid. Proceed to CSR/finalize.");
+          updateActiveCertificateRequest({
+            status: "authorized",
+            errorMessage: "",
+          });
+          pushLog("All SAN authorizations are valid. Proceed to CSR/finalize.");
         } else {
-          pushLog(`Authorization is currently ${auth.status}.`);
+          pushLog(`Selected authorization is currently ${auth.status}.`);
         }
       });
     } catch (error) {
       handleError(error);
     }
+  });
+
+  document.getElementById("checkAllAuthStatusBtn").addEventListener("click", async () => {
+    if (state.busy) {
+      return;
+    }
+
+    try {
+      await runStep("Checking all SAN authorization statuses...", async () => {
+        await refreshAllAuthorizations();
+        if (areAllAuthorizationsValid()) {
+          state.step = 4;
+          updateActiveCertificateRequest({
+            status: "authorized",
+            errorMessage: "",
+          });
+          pushLog("All SAN authorizations are valid. Proceed to CSR/finalize.");
+        } else {
+          pushLog("Some SAN authorizations are still pending. Continue validation.");
+        }
+      });
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+  document.getElementById("continueToFinalizeBtn").addEventListener("click", () => {
+    if (state.busy || !areAllAuthorizationsValid()) {
+      return;
+    }
+
+    state.step = 4;
+    render();
   });
 }
 
@@ -1021,7 +1205,8 @@ function renderStepResult() {
     </div>
   `;
 
-  const fileStem = getCertificateFileStem(state.identifierValue || "certificate");
+  const primaryIdentifier = getPrimaryIdentifierValue(state.sanIdentifiers) || state.identifierValue || "certificate";
+  const fileStem = getCertificateFileStem(primaryIdentifier);
 
   document.getElementById("downloadCertBtn").addEventListener("click", () => {
     downloadTextFile(`${fileStem}.crt`, state.certificatePem);
@@ -1204,6 +1389,8 @@ function clearOrderContext(options = {}) {
 
   state.activeRequestId = "";
   state.identifierValue = "";
+  state.sanInputValues = [""];
+  state.sanIdentifiers = [];
   if (!preserveDirectoryMetadata) {
     state.profile = "";
     state.directoryProfiles = {};
@@ -1211,6 +1398,8 @@ function clearOrderContext(options = {}) {
   }
   state.order = null;
   state.orderUrl = "";
+  state.authorizationStates = [];
+  state.selectedAuthorizationUrl = "";
   state.authorization = null;
   state.authorizationUrl = "";
   state.availableChallenges = {};
@@ -1249,8 +1438,27 @@ function normalizeCertificateRequest(value) {
     return null;
   }
 
-  if (typeof value.identifierValue !== "string" || !value.identifierValue.trim()) {
+  const sanValuesFromRecord = Array.isArray(value.sanValues)
+    ? value.sanValues
+      .map((item) => normalizeIdentifierValue(String(item || "")))
+      .filter(Boolean)
+    : [];
+  const legacyIdentifier = typeof value.identifierValue === "string"
+    ? normalizeIdentifierValue(value.identifierValue)
+    : "";
+  const sanValues = Array.from(new Set([...sanValuesFromRecord, legacyIdentifier].filter(Boolean)));
+
+  if (!sanValues.length) {
     return null;
+  }
+
+  const hasIp = sanValues.some((item) => isLikelyIpAddress(item));
+  const hasDns = sanValues.some((item) => !isLikelyIpAddress(item));
+  let derivedCertType = "dns";
+  if (hasIp && hasDns) {
+    derivedCertType = "mixed";
+  } else if (hasIp) {
+    derivedCertType = "ip";
   }
 
   const createdAt = typeof value.createdAt === "string" && value.createdAt.trim()
@@ -1264,8 +1472,9 @@ function normalizeCertificateRequest(value) {
   return {
     id: typeof value.id === "string" && value.id.trim() ? value.id : `req_${Date.now()}`,
     status: typeof value.status === "string" ? value.status : "pending",
-    certType: typeof value.certType === "string" ? value.certType : "dns",
-    identifierValue: value.identifierValue.trim(),
+    certType: typeof value.certType === "string" ? value.certType : derivedCertType,
+    identifierValue: sanValues[0],
+    sanValues,
     accountId: typeof value.accountId === "string" ? value.accountId : "",
     accountKid: typeof value.accountKid === "string" ? value.accountKid : "",
     providerId: typeof value.providerId === "string" ? value.providerId : "",
@@ -1289,6 +1498,7 @@ function createCertificateRequestRecord(data) {
     status: data.status || "pending",
     certType: data.certType,
     identifierValue: data.identifierValue,
+    sanValues: data.sanValues,
     accountId: data.accountId,
     accountKid: data.accountKid,
     providerId: data.providerId,
@@ -1796,14 +2006,21 @@ async function createAcmeOrder() {
     throw new Error("Please initialize your ACME account first.");
   }
 
+  if (!Array.isArray(state.sanIdentifiers) || !state.sanIdentifiers.length) {
+    throw new Error("Add at least one SAN identifier before creating an order.");
+  }
+
   const providerConfig = getProviderConfig();
   const allowedIdentifierTypes = getAllowedIdentifierTypesForProfile(providerConfig, state.profile);
-  if (!allowedIdentifierTypes.includes(state.certType)) {
-    throw new Error(`Profile ${state.profile || "default"} does not permit ${state.certType.toUpperCase()} identifiers.`);
+  const unsupportedIdentifier = state.sanIdentifiers.find((item) => !allowedIdentifierTypes.includes(item.type));
+  if (unsupportedIdentifier) {
+    throw new Error(`Profile ${state.profile || "default"} does not permit ${unsupportedIdentifier.type.toUpperCase()} identifiers.`);
   }
 
   state.order = null;
   state.orderUrl = "";
+  state.authorizationStates = [];
+  state.selectedAuthorizationUrl = "";
   state.authorization = null;
   state.authorizationUrl = "";
   state.availableChallenges = {};
@@ -1817,7 +2034,10 @@ async function createAcmeOrder() {
 
   pushLog("Creating new order...");
   const orderPayload = {
-    identifiers: [{ type: state.certType, value: state.identifierValue }],
+    identifiers: state.sanIdentifiers.map((item) => ({
+      type: item.type,
+      value: item.value,
+    })),
   };
   if (state.profile) {
     orderPayload.profile = state.profile;
@@ -1833,8 +2053,9 @@ async function createAcmeOrder() {
   state.orderUrl = orderUrl;
   createCertificateRequestRecord({
     status: state.order.status || "pending",
-    certType: state.certType,
-    identifierValue: state.identifierValue,
+    certType: deriveRequestCertType(state.sanIdentifiers),
+    identifierValue: getPrimaryIdentifierValue(state.sanIdentifiers),
+    sanValues: state.sanIdentifiers.map((item) => item.value),
     accountId: state.selectedAccountId,
     accountKid: state.accountKid,
     providerId: state.provider,
@@ -1847,24 +2068,56 @@ async function createAcmeOrder() {
     throw new Error("Order does not include authorization URLs.");
   }
 
-  state.authorizationUrl = state.order.authorizations[0];
-  const authorization = await fetchAuthorization();
+  for (const authorizationUrl of state.order.authorizations) {
+    const authorization = await fetchAuthorizationByUrl(authorizationUrl);
+    const authorizationState = await createAuthorizationState(authorizationUrl, authorization);
+    state.authorizationStates.push(authorizationState);
+    pushLog(`Authorization loaded for ${authorizationState.identifierType}:${authorizationState.identifierValue} (${authorizationState.status}).`);
+  }
 
-  if (!Object.keys(state.availableChallenges).length) {
+  state.sanIdentifiers = state.authorizationStates
+    .map((item) => ({ type: item.identifierType, value: item.identifierValue }))
+    .filter((item) => (item.type === "dns" || item.type === "ip") && item.value);
+  state.identifierValue = getPrimaryIdentifierValue(state.sanIdentifiers);
+  state.certType = deriveRequestCertType(state.sanIdentifiers);
+  updateActiveCertificateRequest({
+    certType: state.certType,
+    identifierValue: state.identifierValue,
+    sanValues: state.sanIdentifiers.map((item) => item.value),
+  });
+
+  const preferredAuthorization = state.authorizationStates.find((item) => item.status !== "valid") || state.authorizationStates[0];
+  state.selectedAuthorizationUrl = preferredAuthorization?.url || "";
+
+  if (!state.authorizationStates.some((item) => Object.keys(item.availableChallenges || {}).length)) {
     throw new Error("No supported challenge found. Expected http-01 or dns-01.");
+  }
+
+  if (areAllAuthorizationsValid()) {
+    state.step = 4;
+    updateActiveCertificateRequest({
+      status: "authorized",
+      errorMessage: "",
+    });
+    setAlert("success", "All SAN authorizations are already valid. Continue to CSR/finalize.");
+    return;
   }
 
   state.step = 3;
   updateActiveCertificateRequest({
-    status: authorization.status === "valid" ? "authorized" : (state.order.status || "pending"),
+    status: "validating",
     errorMessage: "",
   });
-  pushLog(`Challenge selected: ${state.selectedChallengeType}`);
-  setAlert("success", "Order created. Publish your challenge response and continue.");
+  setAlert("success", "Order created. Complete validation for each SAN authorization.");
 }
 
 async function triggerChallenge() {
-  if (!state.challenge?.url) {
+  const authorizationState = getSelectedAuthorizationState();
+  if (!authorizationState) {
+    throw new Error("No authorization selected.");
+  }
+
+  if (!authorizationState.challenge?.url) {
     throw new Error("Challenge URL is missing.");
   }
 
@@ -1872,26 +2125,34 @@ async function triggerChallenge() {
     status: "validating",
     errorMessage: "",
   });
-  await acmePost(state.challenge.url, {});
-  pushLog("Challenge notified to ACME server.");
+  await acmePost(authorizationState.challenge.url, {});
+  pushLog(`Challenge notified to ACME server for ${authorizationState.identifierValue}.`);
 
-  const authorization = await pollAuthorizationUntilTerminal();
+  const authorization = await pollAuthorizationUntilTerminal(authorizationState);
   if (authorization.status !== "valid") {
     throw new Error(`Authorization ended with status ${authorization.status}.`);
   }
 
-  state.step = 4;
-  updateActiveCertificateRequest({
-    status: "authorized",
-    errorMessage: "",
-  });
-  setAlert("success", "Authorization is valid. Continue to CSR and finalize.");
+  if (areAllAuthorizationsValid()) {
+    state.step = 4;
+    updateActiveCertificateRequest({
+      status: "authorized",
+      errorMessage: "",
+    });
+    setAlert("success", "All SAN authorizations are valid. Continue to CSR and finalize.");
+  } else {
+    pushLog(`Authorization for ${authorizationState.identifierValue} is valid. Continue with remaining SAN entries.`);
+  }
 }
 
 async function finalizeOrder() {
-  const latestAuth = await fetchAuthorization();
-  if (latestAuth.status !== "valid") {
-    throw new Error(`Authorization is ${latestAuth.status}. Complete challenge validation first.`);
+  await refreshAllAuthorizations();
+  const nonValidAuthorizations = state.authorizationStates.filter((item) => item.status !== "valid");
+  if (nonValidAuthorizations.length) {
+    const pendingDetails = nonValidAuthorizations
+      .map((item) => `${item.identifierValue} (${item.status})`)
+      .join(", ");
+    throw new Error(`Complete SAN validation first. Pending authorizations: ${pendingDetails}.`);
   }
 
   updateActiveCertificateRequest({
@@ -1904,7 +2165,7 @@ async function finalizeOrder() {
   state.domainPrivateKeyPem = await exportPrivateKeyToPem(state.domainKeyPair.privateKey);
 
   pushLog("Creating CSR with forge...");
-  const csr = await createCsrBase64Url(state.domainKeyPair, state.identifierValue, state.certType);
+  const csr = await createCsrBase64Url(state.domainKeyPair, state.sanIdentifiers);
 
   pushLog("Submitting finalize request...");
   await acmePost(state.order.finalize, { csr });
@@ -1925,26 +2186,18 @@ async function finalizeOrder() {
 }
 
 async function fetchAuthorization() {
-  const response = await acmePost(state.authorizationUrl, null);
-  state.authorization = response.data;
-  await syncChallengesFromAuthorization(state.authorization);
-  return state.authorization;
+  const authorizationState = getSelectedAuthorizationState();
+  if (!authorizationState) {
+    throw new Error("No authorization is selected.");
+  }
+
+  await refreshAuthorizationState(authorizationState);
+  return authorizationState.authorization;
 }
 
-async function syncChallengesFromAuthorization(authorization) {
-  const nextChallenges = buildChallengeMap(authorization?.challenges || []);
-  if (!Object.keys(nextChallenges).length) {
-    return;
-  }
-
-  state.availableChallenges = nextChallenges;
-
-  let preferredType = state.selectedChallengeType;
-  if (!preferredType || !state.availableChallenges[preferredType]) {
-    preferredType = state.availableChallenges["http-01"] ? "http-01" : "dns-01";
-  }
-
-  await applyChallengeSelection(preferredType, { silent: true });
+async function fetchAuthorizationByUrl(authorizationUrl) {
+  const response = await acmePost(authorizationUrl, null);
+  return response.data;
 }
 
 function buildChallengeMap(challenges) {
@@ -1957,27 +2210,136 @@ function buildChallengeMap(challenges) {
   return supported;
 }
 
-async function applyChallengeSelection(type, options = {}) {
+async function createAuthorizationState(authorizationUrl, authorization) {
+  const identifierType = authorization?.identifier?.type || "dns";
+  const identifierValue = normalizeIdentifierValue(authorization?.identifier?.value || "");
+  const authorizationState = {
+    url: authorizationUrl,
+    status: authorization?.status || "pending",
+    identifierType,
+    identifierValue,
+    authorization,
+    availableChallenges: buildChallengeMap(authorization?.challenges || []),
+    selectedChallengeType: "",
+    challenge: null,
+    keyAuthorization: "",
+    dnsTxtValue: "",
+  };
+
+  const preferredType = authorizationState.availableChallenges["http-01"]
+    ? "http-01"
+    : (authorizationState.availableChallenges["dns-01"] ? "dns-01" : "");
+  if (preferredType) {
+    await applyAuthorizationChallengeSelection(authorizationState, preferredType, { silent: true });
+  }
+
+  return authorizationState;
+}
+
+async function refreshAuthorizationState(authorizationState) {
+  const authorization = await fetchAuthorizationByUrl(authorizationState.url);
+  authorizationState.authorization = authorization;
+  authorizationState.status = authorization?.status || "pending";
+
+  if (authorization?.identifier?.type) {
+    authorizationState.identifierType = authorization.identifier.type;
+  }
+  if (authorization?.identifier?.value) {
+    authorizationState.identifierValue = normalizeIdentifierValue(authorization.identifier.value);
+  }
+
+  authorizationState.availableChallenges = buildChallengeMap(authorization?.challenges || []);
+
+  let preferredType = authorizationState.selectedChallengeType;
+  if (!preferredType || !authorizationState.availableChallenges[preferredType]) {
+    preferredType = authorizationState.availableChallenges["http-01"]
+      ? "http-01"
+      : (authorizationState.availableChallenges["dns-01"] ? "dns-01" : "");
+  }
+
+  if (preferredType) {
+    await applyAuthorizationChallengeSelection(authorizationState, preferredType, { silent: true });
+  } else {
+    authorizationState.selectedChallengeType = "";
+    authorizationState.challenge = null;
+    authorizationState.keyAuthorization = "";
+    authorizationState.dnsTxtValue = "";
+  }
+
+  if (state.selectedAuthorizationUrl === authorizationState.url) {
+    state.authorization = authorizationState.authorization;
+    state.authorizationUrl = authorizationState.url;
+    state.availableChallenges = authorizationState.availableChallenges;
+    state.selectedChallengeType = authorizationState.selectedChallengeType;
+    state.challenge = authorizationState.challenge;
+    state.keyAuthorization = authorizationState.keyAuthorization;
+    state.dnsTxtValue = authorizationState.dnsTxtValue;
+  }
+
+  return authorizationState.authorization;
+}
+
+async function refreshAllAuthorizations() {
+  for (const authorizationState of state.authorizationStates) {
+    await refreshAuthorizationState(authorizationState);
+    pushLog(`Authorization ${authorizationState.identifierValue}: ${authorizationState.status}`);
+  }
+}
+
+function getSelectedAuthorizationState() {
+  if (!state.authorizationStates.length) {
+    return null;
+  }
+
+  let selected = state.authorizationStates.find((item) => item.url === state.selectedAuthorizationUrl);
+  if (!selected) {
+    selected = state.authorizationStates.find((item) => item.status !== "valid") || state.authorizationStates[0];
+    state.selectedAuthorizationUrl = selected.url;
+  }
+
+  state.authorization = selected.authorization;
+  state.authorizationUrl = selected.url;
+  state.availableChallenges = selected.availableChallenges;
+  state.selectedChallengeType = selected.selectedChallengeType;
+  state.challenge = selected.challenge;
+  state.keyAuthorization = selected.keyAuthorization;
+  state.dnsTxtValue = selected.dnsTxtValue;
+
+  return selected;
+}
+
+function areAllAuthorizationsValid() {
+  return state.authorizationStates.length > 0 && state.authorizationStates.every((item) => item.status === "valid");
+}
+
+async function applyAuthorizationChallengeSelection(authorizationState, type, options = {}) {
   const { silent = false } = options;
 
-  const challenge = state.availableChallenges[type];
+  const challenge = authorizationState.availableChallenges[type];
   if (!challenge) {
     throw new Error(`Challenge method ${type} is not available for this order.`);
   }
 
-  state.selectedChallengeType = type;
-  state.challenge = challenge;
-  state.keyAuthorization = `${challenge.token}.${state.accountThumbprint}`;
+  authorizationState.selectedChallengeType = type;
+  authorizationState.challenge = challenge;
+  authorizationState.keyAuthorization = `${challenge.token}.${state.accountThumbprint}`;
 
   if (challenge.type === "dns-01") {
-    const digest = await crypto.subtle.digest("SHA-256", utf8Bytes(state.keyAuthorization));
-    state.dnsTxtValue = base64UrlFromArrayBuffer(digest);
+    const digest = await crypto.subtle.digest("SHA-256", utf8Bytes(authorizationState.keyAuthorization));
+    authorizationState.dnsTxtValue = base64UrlFromArrayBuffer(digest);
   } else {
-    state.dnsTxtValue = "";
+    authorizationState.dnsTxtValue = "";
+  }
+
+  if (state.selectedAuthorizationUrl === authorizationState.url) {
+    state.selectedChallengeType = authorizationState.selectedChallengeType;
+    state.challenge = authorizationState.challenge;
+    state.keyAuthorization = authorizationState.keyAuthorization;
+    state.dnsTxtValue = authorizationState.dnsTxtValue;
   }
 
   if (!silent) {
-    pushLog(`Challenge selected: ${challenge.type}`);
+    pushLog(`Challenge selected for ${authorizationState.identifierValue}: ${challenge.type}`);
   }
 }
 
@@ -1998,11 +2360,11 @@ async function fetchCertificate(certificateUrl) {
   });
 }
 
-async function pollAuthorizationUntilTerminal() {
+async function pollAuthorizationUntilTerminal(authorizationState) {
   const maxAttempts = 25;
   for (let index = 0; index < maxAttempts; index += 1) {
-    const authorization = await fetchAuthorization();
-    pushLog(`Authorization status: ${authorization.status}`);
+    const authorization = await refreshAuthorizationState(authorizationState);
+    pushLog(`Authorization status for ${authorizationState.identifierValue}: ${authorization.status}`);
 
     if (authorization.status === "valid" || authorization.status === "invalid") {
       if (authorization.status === "invalid") {
@@ -2217,25 +2579,42 @@ async function createJwkThumbprint(jwk) {
   return base64UrlFromArrayBuffer(digest);
 }
 
-async function createCsrBase64Url(domainKeyPair, identifierValue, certType) {
+async function createCsrBase64Url(domainKeyPair, identifiers) {
+  const normalizedIdentifiers = Array.isArray(identifiers)
+    ? identifiers
+      .map((item) => ({
+        type: item?.type,
+        value: normalizeIdentifierValue(item?.value || ""),
+      }))
+      .filter((item) => (item.type === "dns" || item.type === "ip") && item.value)
+    : [];
+
+  if (!normalizedIdentifiers.length) {
+    throw new Error("Unable to generate CSR: SAN identifier list is empty.");
+  }
+
   const privatePem = await exportPrivateKeyToPem(domainKeyPair.privateKey);
   const publicPem = await exportPublicKeyToPem(domainKeyPair.publicKey);
 
   const privateKey = forge.pki.privateKeyFromPem(privatePem);
   const publicKey = forge.pki.publicKeyFromPem(publicPem);
 
-  const subjectAltName = certType === "ip"
-    ? { type: 7, ip: identifierValue }
-    : { type: 2, value: identifierValue };
+  const subjectAltNames = normalizedIdentifiers.map((item) => {
+    if (item.type === "ip") {
+      return { type: 7, ip: item.value };
+    }
+    return { type: 2, value: item.value };
+  });
 
   const csr = forge.pki.createCertificationRequest();
   csr.publicKey = publicKey;
-  // Let's Encrypt rejects CSRs that contain an IP address in the Common Name.
-  // For IP identifiers, keep subject empty and rely on SAN only.
-  if (certType === "ip") {
+  // Keep CN on a DNS SAN when available. For IP-only certificates,
+  // keep subject empty and rely on SAN extension only.
+  const commonNameIdentifier = normalizedIdentifiers.find((item) => item.type === "dns");
+  if (!commonNameIdentifier) {
     csr.setSubject([]);
   } else {
-    csr.setSubject([{ name: "commonName", value: identifierValue }]);
+    csr.setSubject([{ name: "commonName", value: commonNameIdentifier.value }]);
   }
   csr.setAttributes([
     {
@@ -2243,7 +2622,7 @@ async function createCsrBase64Url(domainKeyPair, identifierValue, certType) {
       extensions: [
         {
           name: "subjectAltName",
-          altNames: [subjectAltName],
+          altNames: subjectAltNames,
         },
       ],
     },
@@ -2269,7 +2648,89 @@ function binaryStringToUint8Array(value) {
 }
 
 function normalizeIdentifierValue(value) {
-  return value.trim().toLowerCase();
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeSanInputValues(values) {
+  const nextValues = Array.isArray(values)
+    ? values.map((item) => String(item || ""))
+    : [""];
+
+  while (
+    nextValues.length > 1
+    && !nextValues[nextValues.length - 1].trim()
+    && !nextValues[nextValues.length - 2].trim()
+  ) {
+    nextValues.pop();
+  }
+
+  if (!nextValues.length || nextValues[nextValues.length - 1].trim()) {
+    nextValues.push("");
+  }
+
+  return nextValues;
+}
+
+function parseSanIdentifiers(rawValues) {
+  const result = {
+    identifiers: [],
+    errors: [],
+  };
+
+  const seen = new Set();
+  const values = Array.isArray(rawValues) ? rawValues : [];
+
+  for (const rawValue of values) {
+    const normalizedValue = normalizeIdentifierValue(rawValue);
+    if (!normalizedValue) {
+      continue;
+    }
+
+    if (/\s/.test(normalizedValue)) {
+      result.errors.push(`SAN value "${normalizedValue}" is invalid: whitespace is not allowed.`);
+      continue;
+    }
+
+    const type = isLikelyIpAddress(normalizedValue) ? "ip" : "dns";
+    const dedupeKey = `${type}:${normalizedValue}`;
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    result.identifiers.push({
+      type,
+      value: normalizedValue,
+    });
+  }
+
+  return result;
+}
+
+function deriveRequestCertType(identifiers) {
+  const hasIp = identifiers.some((item) => item.type === "ip");
+  const hasDns = identifiers.some((item) => item.type === "dns");
+
+  if (hasIp && hasDns) {
+    return "mixed";
+  }
+  if (hasIp) {
+    return "ip";
+  }
+  return "dns";
+}
+
+function getPrimaryIdentifierValue(identifiers) {
+  if (!Array.isArray(identifiers) || !identifiers.length) {
+    return "";
+  }
+
+  const firstDns = identifiers.find((item) => item.type === "dns" && item.value);
+  if (firstDns) {
+    return firstDns.value;
+  }
+
+  return identifiers[0].value || "";
 }
 
 function isLikelyIpAddress(value) {
