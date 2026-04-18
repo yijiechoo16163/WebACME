@@ -215,6 +215,8 @@ function renderStepChallenge() {
   const hasMethodChoices = availableTypes.length > 1;
   const isHttp = challenge?.type === "http-01";
   const isDns = challenge?.type === "dns-01";
+  const hasHttp = availableTypes.includes("http-01");
+  const hasDns = availableTypes.includes("dns-01");
 
   refs.content.innerHTML = `
     <div class="mb-3">
@@ -224,11 +226,25 @@ function renderStepChallenge() {
 
     <div class="row g-3">
       <div class="col-12 col-md-7">
-        <label for="challengeTypeInput" class="form-label">Validation Method</label>
-        <select id="challengeTypeInput" class="form-select" ${state.busy ? "disabled" : ""}>
-          ${availableTypes.includes("http-01") ? `<option value="http-01" ${state.selectedChallengeType === "http-01" ? "selected" : ""}>HTTP-01</option>` : ""}
-          ${availableTypes.includes("dns-01") ? `<option value="dns-01" ${state.selectedChallengeType === "dns-01" ? "selected" : ""}>DNS-01</option>` : ""}
-        </select>
+        <label class="form-label">Validation Method</label>
+        <div class="btn-group w-100" role="group" aria-label="Validation method selection">
+          <button
+            id="challengeTypeHttpBtn"
+            type="button"
+            class="btn ${state.selectedChallengeType === "http-01" ? "btn-primary" : "btn-outline-primary"}"
+            ${!hasHttp || state.busy ? "disabled" : ""}
+          >
+            HTTP-01
+          </button>
+          <button
+            id="challengeTypeDnsBtn"
+            type="button"
+            class="btn ${state.selectedChallengeType === "dns-01" ? "btn-primary" : "btn-outline-primary"}"
+            ${!hasDns || state.busy ? "disabled" : ""}
+          >
+            DNS-01
+          </button>
+        </div>
       </div>
       <div class="col-12">
         <div class="alert alert-secondary mb-0">${hasMethodChoices ? "You can switch between HTTP-01 and DNS-01 at any time before authorization becomes valid." : "Only one challenge method is currently available for this authorization."}</div>
@@ -262,25 +278,32 @@ function renderStepChallenge() {
     </div>
   `;
 
-  document.getElementById("challengeTypeInput").addEventListener("change", async (event) => {
-    if (state.busy) {
-      return;
+  const challengeTypeButtons = [
+    { id: "challengeTypeHttpBtn", type: "http-01" },
+    { id: "challengeTypeDnsBtn", type: "dns-01" },
+  ];
+
+  for (const item of challengeTypeButtons) {
+    const button = document.getElementById(item.id);
+    if (!button || button.disabled) {
+      continue;
     }
 
-    const nextType = event.target.value;
-    if (nextType === state.selectedChallengeType) {
-      return;
-    }
+    button.addEventListener("click", async () => {
+      if (state.busy || item.type === state.selectedChallengeType) {
+        return;
+      }
 
-    try {
-      await runStep(`Switching validation method to ${nextType}...`, async () => {
-        await applyChallengeSelection(nextType);
-        pushLog(`Validation method switched to ${nextType}.`);
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
+      try {
+        await runStep(`Switching validation method to ${item.type}...`, async () => {
+          await applyChallengeSelection(item.type);
+          pushLog(`Validation method switched to ${item.type}.`);
+        });
+      } catch (error) {
+        handleError(error);
+      }
+    });
+  }
 
   document.getElementById("triggerChallengeBtn").addEventListener("click", async () => {
     if (state.busy) {
